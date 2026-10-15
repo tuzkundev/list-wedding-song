@@ -275,11 +275,26 @@ textarea#playlist-input {
 }
 .search-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 12px;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
   align-items: end;
   margin-top: 12px;
 }
+.file-upload-btn {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.file-upload-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
 .track-state {
   display: inline-flex;
   align-items: center;

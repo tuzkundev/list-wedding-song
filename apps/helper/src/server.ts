@@ -100,8 +100,9 @@ export const safeErrorHandler: ErrorRequestHandler = (error: unknown, _request, 
   response.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Đã xảy ra lỗi nội bộ.' } });
 };
 
+const CLOUDFLARE_APP_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*list-wedding-song\.[a-z0-9-]+\.workers\.dev$|^https:\/\/(?:[a-z0-9-]+\.)*list-wedding-song\.pages\.dev$/;
 function isAllowedOrigin(origin: string, devOrigin: string | null): boolean {
-  return EXTENSION_ORIGIN.test(origin) || (devOrigin !== null && origin === devOrigin);
+  return EXTENSION_ORIGIN.test(origin) || CLOUDFLARE_APP_ORIGIN.test(origin) || (devOrigin !== null && (origin === devOrigin || /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/.test(origin)));
 }
 
 function handlePreflight(
@@ -133,6 +134,7 @@ function handlePreflight(
   response.setHeader('Access-Control-Allow-Origin', origin);
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST');
   response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  response.setHeader('Access-Control-Allow-Private-Network', 'true');
   response.setHeader('Access-Control-Max-Age', '600');
   appendVaryOrigin(response);
   response.status(204).end();

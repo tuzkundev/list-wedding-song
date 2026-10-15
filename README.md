@@ -2,6 +2,19 @@
 
 Extension Chrome/Edge desktop và helper cục bộ để chuẩn bị nhạc cưới từ danh sách văn bản. Chỉ tải/xử lý nội dung bạn có quyền sử dụng.
 
+## Website trên Cloudflare (Free Tier)
+
+- **URL trực tiếp**: https://list-wedding-song.nguyenqq611.workers.dev
+- **Dịch vụ sử dụng (100% Cloudflare Free)**:
+  - **Cloudflare Workers + Static Assets** (`worker/index.ts`, `wrangler.jsonc`): phục vụ giao diện web và API `/api/*`.
+  - **Cloudflare D1 Database** (`wedding-music-db` — `migrations/0001_init.sql`): lưu trữ danh sách nhạc cưới (`playlists_state`), metadata sóng nhạc (`cloud_assets`) và bộ nhớ đệm tìm kiếm YouTube (`search_cache`).
+  - **Cloudflare Workers KV** (`WEDDING_KV`): lưu trữ file âm thanh đã chuẩn bị (`audio:<assetId>`) để phát lại trực tiếp từ Cloudflare.
+  - Hỗ trợ cả 2 chế độ: tự động kết nối với `helper` chạy ngầm trên máy (`127.0.0.1:43127`) để tải YouTube bằng `yt-dlp`/`ffmpeg` rồi đồng bộ lên Cloudflare D1 + KV, hoặc chọn file nhạc trực tiếp từ máy (`📁 Chọn file nhạc`) và cắt/fade/xuất ZIP ngay trên trình duyệt bằng Web Audio API (`OfflineAudioContext`).
+- **Lệnh deploy lại lên Cloudflare**:
+  ```sh
+  npm run deploy:cloudflare
+  ```
+
 ## Cài đặt
 
 Cần Node.js 22+, npm, yt-dlp, FFmpeg/ffprobe và Deno (khuyến nghị) hoặc Node.js 22+ làm JavaScript runtime của yt-dlp. Trên macOS: `brew install yt-dlp ffmpeg deno`.

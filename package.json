@@ -8,6 +8,8 @@
     "helper:stop-autostart": "node scripts/autostart-macos.mjs uninstall",
     "dev:extension": "npm run dev -w @wedding/extension",
     "build": "npm run build --workspaces --if-present",
+    "deploy:cloudflare": "npm run build && wrangler deploy",
+    "db:migrate": "wrangler d1 execute wedding-music-db --remote --file=migrations/0001_init.sql",
     "test": "vitest run",
     "lint": "tsc --noEmit -p packages/shared && tsc --noEmit -p apps/helper && tsc --noEmit -p apps/extension"
   },

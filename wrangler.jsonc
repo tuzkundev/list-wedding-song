@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "list-wedding-song",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-10-01",
+  "assets": {
+    "directory": "./apps/extension/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "wedding_music_db",
+      "database_name": "wedding-music-db",
+      "database_id": "6c5c6d45-3861-4046-8aa8-41dcb60a8289"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "WEDDING_KV",
+      "id": "61460f2a763241ff8370e062728ed2a5"
+    }
+  ]
+}

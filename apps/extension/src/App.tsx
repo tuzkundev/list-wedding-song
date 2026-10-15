@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Asset, Health, Job } from '@wedding/shared/api';
+import type { Asset, Health } from '@wedding/shared/api';
 import { formatTimestamp, getEditErrors } from '@wedding/shared/edit';
 import { buildSearchQuery, cleanTitleText, extractTrailingNote, parsePlaylist, PlaylistSchema, sanitizeSearchQuery, type ParseResult, type Playlist, type Track } from '@wedding/shared/playlist';
-import { ApiError, fetchBlobUrl, forEachConcurrent, getAsset, getHealth, pollJob, search, startAssetJob, startExportJob } from './api';
+import { exportPlaylistZip, fetchBlobUrl, forEachConcurrent, getAsset, getHealth, prepareTrackAudio, search, uploadCustomAudioFile } from './api';
 import { previewAudio, TrackEditor } from './components/TrackEditor';
 import { readStorage, writeStorage } from './storage';
 
@@ -142,14 +142,19 @@ export default function App() {
     try {
       const videoChanged = Boolean(overrideVideoId && overrideVideoId !== track.selectedVideoId);
       let asset = !videoChanged && track.assetId ? assets[track.assetId] : undefined;
-      if (!asset) {
-        const accepted = await startAssetJob(targetVideoId);
-        const result = await pollJob(accepted.jobId, abortRef.current.signal);
-        if (!('assetId' in result)) throw new ApiError('INVALID_JOB', 'Kết quả tải âm thanh không hợp lệ.');
-        asset = result; setAssets(prev => ({ ...prev, [asset!.assetId]: asset! }));
+      if (!asset || !audioUrls[asset.assetId]) {
+        const prepared = await prepareTrackAudio(targetVideoId, abortRef.current.signal);
+        asset = prepared.asset;
+        setAssets(prev => ({ ...prev, [asset!.assetId]: asset! }));
+        setAudioUrls(prev => ({ ...prev, [asset!.assetId]: prepared.audioUrl }));
+        const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+        updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
+        previewAudio.startMark = track.startSeconds;
+        const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
+        previewAudio.play(track.id, prepared.audioUrl, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
+        return;
       }
-      let url = audioUrls[asset.assetId];
-      if (!url) { url = await fetchBlobUrl(`/assets/${asset.assetId}/audio`); setAudioUrls(prev => ({ ...prev, [asset!.assetId]: url })); }
+      const url = audioUrls[asset.assetId];
       const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
       updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
       previewAudio.startMark = track.startSeconds;
@@ -157,6 +162,24 @@ export default function App() {
       previewAudio.play(track.id, url, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
     } catch (error) { setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Không chuẩn bị được âm thanh.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [track.id]: '' })); }
+  };
+  const handleUploadTrackFile = async (track: Track, file: File) => {
+    previewAudio.unlock();
+    setTrackBusy(prev => ({ ...prev, [track.id]: 'Đang phân tích file nhạc & lưu lên Cloudflare…' })); setTrackErrors(prev => ({ ...prev, [track.id]: '' }));
+    try {
+      const { asset, audioUrl } = await uploadCustomAudioFile(file, track.selectedVideoId ?? undefined);
+      setAssets(prev => ({ ...prev, [asset.assetId]: asset }));
+      setAudioUrls(prev => ({ ...prev, [asset.assetId]: audioUrl }));
+      const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+      updateTrack(track.id, { assetId: asset.assetId, endSeconds: nextEnd, confirmed: false });
+      previewAudio.startMark = track.startSeconds;
+      const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
+      previewAudio.play(track.id, audioUrl, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
+    } catch (error) {
+      setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Không đọc được file âm thanh.' }));
+    } finally {
+      setTrackBusy(prev => ({ ...prev, [track.id]: '' }));
+    }
   };
 
   const allTracks = playlist?.sections.flatMap(section => section.tracks) ?? [], musicTracks = allTracks.filter(track => track.kind === 'music');
@@ -169,10 +192,7 @@ export default function App() {
     exportSnapshotRef.current = JSON.stringify(body);
     setExportStatus({ text: `Đang chuẩn bị xuất 0/${musicTracks.length} bài…`, snapshotChanged: false });
     try {
-      const accepted = await startExportJob(body);
-      const result = await pollJob(accepted.jobId, abortRef.current.signal, (job: Job) => setExportStatus(prev => ({ text: `Đang xuất ${job.completedTracks}/${job.totalTracks} bài…`, snapshotChanged: prev?.snapshotChanged ?? false })));
-      if (!('exportId' in result)) throw new ApiError('INVALID_EXPORT', 'Không nhận được mã ZIP.');
-      const url = await fetchBlobUrl(`/exports/${result.exportId}/download`);
+      const url = await exportPlaylistZip(body, audioUrls, abortRef.current.signal, (done, total) => setExportStatus(prev => ({ text: `Đang xuất ${done}/${total} bài…`, snapshotChanged: prev?.snapshotChanged ?? false })));
       const link = document.createElement('a'); link.href = url; link.download = 'nhac-cuoi.zip'; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setExportStatus(prev => ({ text: `Đã tải nhac-cuoi.zip (${musicTracks.length}/${musicTracks.length} bài).`, snapshotChanged: prev?.snapshotChanged ?? false }));
@@ -281,6 +301,10 @@ export default function App() {
                           <div className="search-row">
                             <label>Query tìm kiếm<input value={track.query} onChange={e => updateTrack(track.id, { query: e.target.value })} /></label>
                             <button type="button" disabled={!health?.ready || Boolean(trackBusy[track.id])} onClick={() => void runTrackSearch(track)}>Tìm lại</button>
+                            <label className="ghost-button file-upload-btn" title="Tải file nhạc MP3/WAV từ máy lên Cloudflare để cắt">
+                              📁 Chọn file nhạc
+                              <input type="file" accept="audio/*" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void handleUploadTrackFile(track, f); e.currentTarget.value = ''; }} />
+                            </label>
                             <span className={`track-state ${track.confirmed ? 'is-ok' : ''}`}>{track.confirmed ? 'Trạng thái: Đã xác nhận' : 'Trạng thái: Chưa xác nhận'}</span>
                           </div>
 
