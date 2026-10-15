@@ -52,6 +52,10 @@ function startCloudflaredBridge(port: number, cloudKey: string): void {
     child.stdout?.on('data', onChunk);
     child.stderr?.on('data', onChunk);
     child.on('error', () => undefined);
+    const cleanup = () => { try { child.kill('SIGTERM'); } catch {} };
+    process.once('exit', cleanup);
+    process.once('SIGTERM', cleanup);
+    process.once('SIGINT', cleanup);
   } catch {
     // Optional cloudflared bridge
   }

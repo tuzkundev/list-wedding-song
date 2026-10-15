@@ -228,7 +228,7 @@ export default function App() {
         <div className="composer-top">
           <div>
             <h2 id="input-heading">1. Dán danh sách và rà soát cấu trúc</h2>
-            <p className="composer-subtitle">Hỗ trợ mục đánh số <code>1.</code> hoặc <code>1)</code>, khoảng thời gian <code>(1:07–2:10)</code> và dòng chú thích trong ngoặc đơn.</p>
+            <p className="composer-subtitle">Hỗ trợ tự nhận diện tên thư mục kèm bài đánh số (vd: <code>Đón khách 1. Hát cho em, 2. Ba kể con nghe</code>) hoặc mục đánh số <code>1.</code> / <code>1)</code> và khoảng thời gian <code>(1:07–2:10)</code>.</p>
           </div>
           <div className="composer-top-actions">
             {!text.trim() && (
@@ -240,7 +240,7 @@ export default function App() {
           </div>
         </div>
         <label htmlFor="playlist-input" className="input-label">Danh sách nhạc cưới dạng văn bản</label>
-        <textarea id="playlist-input" rows={7} value={text} onChange={e => setText(e.target.value)} placeholder="1. Đón khách&#10;+ Hơn cả yêu&#10;2. Cô dâu (1:07–2:10)&#10;A thousand years" />
+        <textarea id="playlist-input" rows={7} value={text} onChange={e => setText(e.target.value)} placeholder="Đón khách&#10;1. Hát cho em&#10;2. Ba kể con nghe&#10;MC dẫn (1:07–2:10)&#10;1. A thousand years" />
         <div className="composer-actions">
           <button type="button" className="primary-button" disabled={!text.trim()} onClick={() => {
             if (playlist && dirty && !window.confirm('Phân tích lại sẽ thay thế danh sách đã chỉnh sửa. Bạn có chắc muốn tiếp tục?')) return;

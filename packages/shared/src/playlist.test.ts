@@ -40,6 +40,34 @@ describe('playlist review model', () => {
     });
     expect(sanitizeSearchQuery('* Marry you (bản gốc có lời) lyrics')).toBe('Marry you lyrics');
   });
+  it('recognizes unnumbered folder headers with numbered or inline tracks underneath', () => {
+    const inline = parsePlaylist('Đón khách 1. Hát cho em, 2. Ba kể con nghe. MC dẫn 1. Bài hát.');
+    expect(inline.playlist?.sections.map(s => ({
+      title: s.title,
+      tracks: s.tracks.map(t => t.title),
+    }))).toEqual([
+      { title: 'Đón khách', tracks: ['Hát cho em', 'Ba kể con nghe'] },
+      { title: 'MC dẫn', tracks: ['Bài hát'] },
+    ]);
+
+    const multiline = parsePlaylist('Đón khách (0:10-1:00)\n1. Hát cho em\n2. Ba kể con nghe\nMC dẫn\n1. Bài hát');
+    expect(multiline.playlist?.sections.map(s => ({
+      title: s.title,
+      tracks: s.tracks.map(t => [t.title, t.startSeconds, t.endSeconds]),
+    }))).toEqual([
+      { title: 'Đón khách', tracks: [['Hát cho em', 10, 60], ['Ba kể con nghe', 10, 60]] },
+      { title: 'MC dẫn', tracks: [['Bài hát', 0, null]] },
+    ]);
+
+    const bulletedFolders = parsePlaylist('Đón khách\n- Hát cho em\n- Ba kể con nghe\nMC dẫn\n- Bài hát');
+    expect(bulletedFolders.playlist?.sections.map(s => ({
+      title: s.title,
+      tracks: s.tracks.map(t => t.title),
+    }))).toEqual([
+      { title: 'Đón khách', tracks: ['Hát cho em', 'Ba kể con nghe'] },
+      { title: 'MC dẫn', tracks: ['Bài hát'] },
+    ]);
+  });
 });
 
 describe('query instrument boundaries', () => {

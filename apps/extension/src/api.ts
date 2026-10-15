@@ -79,8 +79,8 @@ export async function search(query: string, signal?: AbortSignal) {
   return await requestBase(LOCAL_BASE, '/search', SearchResponseSchema, { query }, signal);
 }
 
-export const startAssetJob = (videoId: string) => requestBase(LOCAL_BASE, '/assets', JobAcceptedSchema, { videoId });
-export const startExportJob = (body: ExportRequest) => requestBase(LOCAL_BASE, '/exports', JobAcceptedSchema, body);
+export const startAssetJob = (videoId: string) => requestBase(LOCAL_BASE, '/assets', JobAcceptedSchema, { videoId }, AbortSignal.timeout(2_500));
+export const startExportJob = (body: ExportRequest) => requestBase(LOCAL_BASE, '/exports', JobAcceptedSchema, body, AbortSignal.timeout(2_500));
 export const getJob = (id: string, signal?: AbortSignal) => requestBase(LOCAL_BASE, `/jobs/${id}`, JobSchema, undefined, signal);
 
 export async function getAsset(id: string): Promise<Asset> {

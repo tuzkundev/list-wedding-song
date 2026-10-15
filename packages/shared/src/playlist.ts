@@ -21,7 +21,7 @@ export function cleanTitleText(raw: string): string {
   return raw
     .replace(/[*∗＊✱✲✳✴✵✶✷✸★☆]+/gu, ' ')
     .replace(/^[\s+•▪▫●○◦◆◇‣⁃–—―>→⇒~#-]+/gu, '')
-    .replace(/[\s+•▪▫●○◦◆◇‣⁃>→⇒~#]+$/gu, '')
+    .replace(/[\s+•▪▫●○◦◆◇‣⁃>→⇒~#:.,;]+$/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -88,41 +88,115 @@ function readRange(text: string, line: number, errors: ParseResult['errors']) {
   return { title: text.slice(0, suffix.index).trim(), range: [values[0] * 60 + values[1], values[2] * 60 + values[3]] as const };
 }
 
+const NUMBERED_LINE = /^(?:[-+•▪▫]\s*)?(\d+)[.)]\s*(.*)$/;
+const BULLET_LINE = /^[+•▪▫●○◦◆◇‣⁃–—―>→⇒-]\s*(.*)$/;
+const NOTE_LINE = /^\([^()]*\)$/;
+
+function expandInlineLines(rawLines: Array<{ text: string; line: number }>): Array<{ text: string; line: number }> {
+  const expanded: Array<{ text: string; line: number }> = [];
+  for (const item of rawLines) {
+    const hasInlineStart = !NUMBERED_LINE.test(item.text) && /\s+1[.)]\s+\S/.test(item.text);
+    const hasMultiNumbered = NUMBERED_LINE.test(item.text) && /(?:[,;]\s*|\s+)\d+[.)]\s+\S/.test(item.text);
+    if (!hasInlineStart && !hasMultiNumbered) {
+      expanded.push(item);
+      continue;
+    }
+    const sentenceChunks = item.text
+      .replace(/([.!?])\s+([^\d,.!?;:\n]+?)\s+(?=1[.)]\s+)/g, '$1\n$2\n')
+      .split('\n');
+    for (const chunk of sentenceChunks) {
+      const trimmed = chunk.trim();
+      if (!trimmed) continue;
+      const splitBeforeOne = !NUMBERED_LINE.test(trimmed)
+        ? trimmed.replace(/\s+(?=1[.)]\s+)/, '\n').split('\n')
+        : [trimmed];
+      for (const part of splitBeforeOne) {
+        const p = part.trim();
+        if (!p) continue;
+        if (NUMBERED_LINE.test(p)) {
+          const items = p.split(/(?:[,;]\s*|\s+)(?=\d+[.)]\s+)/);
+          for (const sub of items) {
+            const cleanSub = sub.replace(/[,;.]+\s*$/, '').trim();
+            if (cleanSub) expanded.push({ text: cleanSub, line: item.line });
+          }
+        } else {
+          expanded.push({ text: p.replace(/[,;.]+\s*$/, '').trim(), line: item.line });
+        }
+      }
+    }
+  }
+  return expanded;
+}
+
 export function parsePlaylist(text: string): ParseResult {
-  const lines = text
+  const rawLines = text
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((value, index) => ({ text: value.replace(/[*∗＊✱✲✳✴✵✶✷✸★☆]+/gu, ' ').trim(), line: index + 1 }))
     .filter(value => value.text);
-  if (!lines.length) return { playlist: null, errors: [] };
+  if (!rawLines.length) return { playlist: null, errors: [] };
+
+  const lines = expandInlineLines(rawLines);
   const errors: ParseResult['errors'] = [];
-  const header = /^(?:[-+•▪▫]\s*)?\d+[.)]\s*(.*)$/;
-  const hasSections = lines.some(value => header.test(value.text));
   const playlist: Playlist = { id: crypto.randomUUID(), title: 'Nhạc cưới', sections: [] };
+
+  const hasNumbered = lines.some(l => NUMBERED_LINE.test(l.text));
+  // Check if numbered lines are tracks under unnumbered folder headers (e.g. "Đón khách\n1. Hát cho em\n2. Ba kể con nghe\nMC dẫn\n1. Bài hát")
+  const numberedAreTracks = hasNumbered && (() => {
+    let sawPlainBeforeNumbered = false;
+    for (let i = 0; i < lines.length; ++i) {
+      const cur = lines[i].text;
+      const next = lines[i + 1]?.text;
+      const curNum = NUMBERED_LINE.exec(cur);
+      if (!curNum && !NOTE_LINE.test(cur) && !BULLET_LINE.test(cur)) {
+        if (next && NUMBERED_LINE.test(next)) sawPlainBeforeNumbered = true;
+      }
+      if (curNum) {
+        // If a numbered line is followed by a bulleted line, or followed by an unnumbered non-note line that is NOT itself a header before another numbered line, then numbered lines are sections.
+        if (next && !NUMBERED_LINE.test(next) && !NOTE_LINE.test(next)) {
+          const afterNext = lines[i + 2]?.text;
+          const nextIsHeaderBeforeNumbered = !BULLET_LINE.test(next) && Boolean(afterNext && NUMBERED_LINE.test(afterNext));
+          if (!nextIsHeaderBeforeNumbered) return false;
+        }
+      }
+    }
+    return sawPlainBeforeNumbered;
+  })();
+
+  // Check if there are no numbers at all, but unbulleted folder headers precede bulleted tracks (e.g. "Đón khách\n- Hát cho em\nMC dẫn\n- Bài hát" or "Đón khách:\nHát cho em")
+  const unnumberedFoldersWithBullets = !hasNumbered && (() => {
+    const colonHeaders = lines.some(l => !NOTE_LINE.test(l.text) && !BULLET_LINE.test(l.text) && /:\s*$/.test(l.text));
+    if (colonHeaders) return true;
+    let headerCount = 0;
+    for (let i = 0; i < lines.length; ++i) {
+      const cur = lines[i].text;
+      const next = lines[i + 1]?.text;
+      if (!NOTE_LINE.test(cur) && !BULLET_LINE.test(cur) && next && BULLET_LINE.test(next)) {
+        ++headerCount;
+      }
+    }
+    return headerCount >= 2;
+  })();
+
   let section: Section | undefined;
   let defaultRange: readonly [number, number] | null = null;
   const titles: string[] = [];
-  if (!hasSections) {
-    section = { id: crypto.randomUUID(), title: 'Danh sách nhạc', tracks: [] };
-    playlist.sections.push(section);
-  }
-  for (const value of lines) {
-    const heading = header.exec(value.text);
-    if (heading) {
-      const parsed = readRange(cleanTitleText(heading[1]), value.line, errors);
-      section = { id: crypto.randomUUID(), title: cleanTitleText(parsed.title), tracks: [] };
+
+  const pushTrack = (rawText: string, lineNo: number) => {
+    if (!section) {
+      section = { id: crypto.randomUUID(), title: 'Danh sách nhạc', tracks: [] };
       playlist.sections.push(section);
-      defaultRange = parsed.range;
-      continue;
     }
-    if (!section) { titles.push(cleanTitleText(value.text)); continue; }
-    const rawCandidate = value.text.replace(/^[\s+•*∗＊✱✲✳✴✵✶✷✸★☆▪▫●○◦◆◇‣⁃–—―>→⇒-]+/gu, '').trim();
-    if (/^\([^()]*\)$/.test(rawCandidate) && section.tracks.length) {
+    const stripped = rawText
+      .replace(/^(?:[-+•▪▫]\s*)?\d+[.)]\s*/, '')
+      .replace(/^[\s+•*∗＊✱✲✳✴✵✶✷✸★☆▪▫●○◦◆◇‣⁃–—―>→⇒-]+/gu, '')
+      .trim();
+    if (NOTE_LINE.test(stripped) && section.tracks.length) {
       const previous = section.tracks[section.tracks.length - 1];
-      previous.note = [previous.note, rawCandidate].filter(Boolean).join('\n');
-      continue;
+      previous.note = [previous.note, stripped].filter(Boolean).join('\n');
+      return;
     }
-    const parsed = readRange(rawCandidate, value.line, errors);
+    const parsed = readRange(stripped, lineNo, errors);
     const extracted = extractTrailingNote(parsed.title);
     const finalTitle = extracted.title || cleanTitleText(parsed.title);
     const range = parsed.range ?? defaultRange;
@@ -141,6 +215,61 @@ export function parsePlaylist(text: string): ParseResult {
       confirmed: false,
       candidates: [],
     });
+  };
+
+  if (numberedAreTracks) {
+    for (const value of lines) {
+      const isNum = NUMBERED_LINE.test(value.text);
+      const isNote = NOTE_LINE.test(value.text);
+      const isBul = BULLET_LINE.test(value.text);
+      if (!isNum && !isNote && !isBul) {
+        const parsed = readRange(cleanTitleText(value.text), value.line, errors);
+        section = { id: crypto.randomUUID(), title: cleanTitleText(parsed.title), tracks: [] };
+        playlist.sections.push(section);
+        defaultRange = parsed.range;
+      } else {
+        pushTrack(value.text, value.line);
+      }
+    }
+    return { playlist, errors };
+  }
+
+  if (unnumberedFoldersWithBullets) {
+    for (const value of lines) {
+      const isNote = NOTE_LINE.test(value.text);
+      const isBul = BULLET_LINE.test(value.text);
+      const isColonHeader = !isNote && !isBul && /:\s*$/.test(value.text);
+      if (isColonHeader || (!isNote && !isBul)) {
+        const parsed = readRange(cleanTitleText(value.text), value.line, errors);
+        section = { id: crypto.randomUUID(), title: cleanTitleText(parsed.title), tracks: [] };
+        playlist.sections.push(section);
+        defaultRange = parsed.range;
+      } else {
+        pushTrack(value.text, value.line);
+      }
+    }
+    return { playlist, errors };
+  }
+
+  if (!hasNumbered) {
+    section = { id: crypto.randomUUID(), title: 'Danh sách nhạc', tracks: [] };
+    playlist.sections.push(section);
+  }
+
+  for (const value of lines) {
+    const heading = NUMBERED_LINE.exec(value.text);
+    if (heading) {
+      const parsed = readRange(cleanTitleText(heading[2]), value.line, errors);
+      section = { id: crypto.randomUUID(), title: cleanTitleText(parsed.title), tracks: [] };
+      playlist.sections.push(section);
+      defaultRange = parsed.range;
+      continue;
+    }
+    if (!section) {
+      titles.push(cleanTitleText(value.text));
+      continue;
+    }
+    pushTrack(value.text, value.line);
   }
   if (titles.length) playlist.title = titles.join(' · ');
   return { playlist, errors };

@@ -58,6 +58,9 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 writeFileSync(plistPath, plist, 'utf8');
 try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }); } catch {}
 try {
+  execFileSync('pkill', ['-f', 'cloudflared tunnel --no-autoupdate --http-host-header 127.0.0.1:43127'], { stdio: 'ignore' });
+} catch {}
+try {
   const pids = execFileSync('lsof', ['-ti', 'tcp:43127'], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean);
   for (const pid of pids) { try { process.kill(Number(pid), 'SIGKILL'); } catch {} }
 } catch {}
