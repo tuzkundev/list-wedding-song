@@ -1,0 +1,5 @@
+{
+  "name": "@wedding/shared", "version": "1.0.0", "private": true, "type": "module",
+  "exports": { "./playlist": "./src/playlist.ts", "./api": "./src/api.ts", "./edit": "./src/edit.ts", "./filenames": "./src/filenames.ts" },
+  "scripts": { "build": "tsc --noEmit" }, "dependencies": { "zod": "^3.25.0" }
+}

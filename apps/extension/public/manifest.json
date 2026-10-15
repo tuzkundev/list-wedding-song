@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Nhạc cưới",
+  "version": "1.0.0",
+  "description": "Chuẩn bị và sắp xếp danh sách nhạc cưới.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Mở Nhạc cưới",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:43127/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:43127; media-src 'self' blob:"
+  }
+}

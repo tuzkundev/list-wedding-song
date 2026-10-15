@@ -1,0 +1,14 @@
+{
+  "name": "@wedding/helper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@wedding/shared": "*",
+    "express": "^5.1.0"
+  }
+}

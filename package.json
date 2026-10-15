@@ -1,0 +1,16 @@
+{
+  "name": "wedding-music", "version": "1.0.0", "private": true, "type": "module",
+  "engines": { "node": ">=22" },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:helper": "npm run dev -w @wedding/helper",
+    "helper:autostart": "node scripts/autostart-macos.mjs install",
+    "helper:stop-autostart": "node scripts/autostart-macos.mjs uninstall",
+    "dev:extension": "npm run dev -w @wedding/extension",
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "lint": "tsc --noEmit -p packages/shared && tsc --noEmit -p apps/helper && tsc --noEmit -p apps/extension"
+  },
+  "dependencies": { "archiver": "^7.0.1", "express": "^5.1.0", "react": "^19.1.0", "react-dom": "^19.1.0", "zod": "^3.25.0" },
+  "devDependencies": { "@types/archiver": "^6.0.3", "@types/chrome": "^0.0.326", "@types/express": "^5.0.3", "@types/node": "^22.15.0", "@types/react": "^19.1.0", "@types/react-dom": "^19.1.0", "@vitejs/plugin-react": "^4.5.0", "tsx": "^4.19.0", "typescript": "^5.8.3", "vite": "^6.3.5", "vitest": "^5.0.4" }
+}
