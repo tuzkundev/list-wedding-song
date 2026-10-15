@@ -27,6 +27,12 @@ export function createRoutes(config: HelperConfig, dependencies: DependencyCheck
     if (!parsed.success) throw new AppError(400, 'INVALID_INPUT', 'Mã video không hợp lệ.');
     response.status(202).json(JobAcceptedSchema.parse({ jobId: jobs.enqueue('download', 0, () => prepareAsset(config.assetsDir, parsed.data.videoId, dependencies.ytDlpRuntimeArgs)) }));
   });
+  router.post('/prepare-sync', async (request, response) => {
+    const parsed = AssetRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw new AppError(400, 'INVALID_INPUT', 'Mã video không hợp lệ.');
+    const asset = await prepareAsset(config.assetsDir, parsed.data.videoId, dependencies.ytDlpRuntimeArgs);
+    response.json(asset);
+  });
   router.get('/jobs/:id', (request, response) => { response.json(jobs.get(request.params.id)); });
   router.get('/assets/:id', async (request, response) => { response.json((await readAsset(config.assetsDir, request.params.id)).asset); });
   router.get('/assets/:id/audio', async (request, response) => {

@@ -1,4 +1,4 @@
-import { AssetSchema, HealthSchema, IdSchema, SearchRequestSchema, SearchResponseSchema, VideoIdSchema, type Candidate } from '../packages/shared/src/api';
+import { AssetRequestSchema, AssetSchema, HealthSchema, IdSchema, SearchRequestSchema, SearchResponseSchema, VideoIdSchema, type Candidate } from '../packages/shared/src/api';
 import { sanitizeSearchQuery } from '../packages/shared/src/playlist';
 
 interface D1PreparedStatement {
@@ -11,6 +11,7 @@ interface D1Database {
 }
 interface KVNamespace {
   get(key: string, type: 'arrayBuffer'): Promise<ArrayBuffer | null>;
+  get(key: string, type?: 'text'): Promise<string | null>;
   put(key: string, value: ArrayBuffer | string, options?: { expirationTtl?: number }): Promise<void>;
 }
 interface Env {
@@ -28,21 +29,38 @@ function corsHeadersFor(request: Request): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Workspace-Id',
     Vary: 'Origin',
   };
 }
 
-function hasValidAuth(request: Request, expectedKey: string | undefined): boolean {
-  if (!expectedKey) return false;
-  const auth = request.headers.get('Authorization') ?? '';
-  const supplied = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
-  if (!supplied || supplied.length !== expectedKey.length) return false;
+function constantTimeEquals(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < expectedKey.length; ++i) {
-    diff |= supplied.charCodeAt(i) ^ expectedKey.charCodeAt(i);
-  }
+  for (let i = 0; i < a.length; ++i) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+function getSuppliedBearer(request: Request): string {
+  const auth = request.headers.get('Authorization') ?? '';
+  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
+}
+
+function hasValidAuth(request: Request, expectedKey: string | undefined): boolean {
+  if (!expectedKey || expectedKey.length < 16) return false;
+  const supplied = getSuppliedBearer(request);
+  const shareKey = expectedKey.slice(0, 16);
+  return constantTimeEquals(supplied, expectedKey) || constantTimeEquals(supplied, shareKey);
+}
+
+function hasOwnerAuth(request: Request, expectedKey: string | undefined): boolean {
+  if (!expectedKey || expectedKey.length < 32) return false;
+  return constantTimeEquals(getSuppliedBearer(request), expectedKey);
+}
+
+function getWorkspaceId(request: Request): string {
+  const raw = request.headers.get('X-Workspace-Id')?.trim() ?? '';
+  return IdSchema.safeParse(raw).success ? raw : 'default';
 }
 
 function jsonResponse(request: Request, body: unknown, status = 200): Response {
@@ -55,6 +73,7 @@ function jsonResponse(request: Request, body: unknown, status = 200): Response {
 function errorResponse(request: Request, status: number, code: string, message: string): Response {
   return jsonResponse(request, { error: { code, message } }, status);
 }
+
 function parseDurationText(raw: string | undefined): number | null {
   if (!raw) return null;
   const parts = raw.trim().split(':').map(Number);
@@ -136,7 +155,7 @@ export default {
         return new Response(null, { status: 204, headers: cors });
       }
       if (!hasValidAuth(request, env.WEDDING_API_KEY)) {
-        return errorResponse(request, 401, 'UNAUTHORIZED', 'Yêu cầu xác thực để truy cập dữ liệu Cloudflare.');
+        return errorResponse(request, 401, 'UNAUTHORIZED', 'Hãy mở qua đường dẫn chia sẻ được cấp phép.');
       }
     }
 
@@ -151,10 +170,30 @@ export default {
         version: '2.0.0-cloudflare',
       }));
     }
+
+    if (url.pathname === '/api/share-info' && request.method === 'GET') {
+      const shareKey = env.WEDDING_API_KEY ? env.WEDDING_API_KEY.slice(0, 16) : '';
+      return jsonResponse(request, { shareKey });
+    }
+
+    if (url.pathname === '/api/tunnel' && request.method === 'PUT') {
+      if (!hasOwnerAuth(request, env.WEDDING_API_KEY)) {
+        return errorResponse(request, 403, 'FORBIDDEN', 'Chỉ máy chủ gốc được cập nhật tunnel.');
+      }
+      const body = (await request.json().catch(() => null)) as { tunnelUrl?: string } | null;
+      const tunnelUrl = typeof body?.tunnelUrl === 'string' ? body.tunnelUrl.trim() : '';
+      if (!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(tunnelUrl)) {
+        return errorResponse(request, 400, 'INVALID_TUNNEL', 'Địa chỉ tunnel không hợp lệ.');
+      }
+      await env.WEDDING_KV.put('config:tunnel_url', tunnelUrl);
+      return jsonResponse(request, { ok: true, tunnelUrl });
+    }
+
     if (url.pathname === '/api/state' && request.method === 'GET') {
+      const workspaceId = getWorkspaceId(request);
       const row = await env.wedding_music_db
         .prepare('SELECT text_content, playlist_json, rights_accepted, updated_at FROM playlists_state WHERE id = ?')
-        .bind('default')
+        .bind(workspaceId)
         .first<{ text_content: string; playlist_json: string | null; rights_accepted: number; updated_at: number }>();
       if (!row) {
         return jsonResponse(request, { text: '', playlist: null, rightsAccepted: true, updatedAt: 0 });
@@ -168,6 +207,7 @@ export default {
     }
 
     if (url.pathname === '/api/state' && request.method === 'PUT') {
+      const workspaceId = getWorkspaceId(request);
       const body = (await request.json().catch(() => null)) as { text?: string; playlist?: unknown; rightsAccepted?: boolean } | null;
       if (!body || typeof body !== 'object') return errorResponse(request, 400, 'INVALID_INPUT', 'Dữ liệu trạng thái không hợp lệ.');
       const text = typeof body.text === 'string' ? body.text : '';
@@ -184,7 +224,7 @@ export default {
              rights_accepted = excluded.rights_accepted,
              updated_at = excluded.updated_at`,
         )
-        .bind('default', text, playlistJson, rightsAccepted, now)
+        .bind(workspaceId, text, playlistJson, rightsAccepted, now)
         .run();
       return jsonResponse(request, { ok: true, updatedAt: now });
     }
@@ -221,6 +261,59 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/prepare-youtube' && request.method === 'POST') {
+      const parsed = AssetRequestSchema.safeParse(await request.json().catch(() => null));
+      if (!parsed.success) return errorResponse(request, 400, 'INVALID_INPUT', 'Mã video không hợp lệ.');
+      const videoId = parsed.data.videoId;
+      const existing = await env.wedding_music_db
+        .prepare('SELECT asset_id, duration_seconds, peaks_json FROM cloud_assets WHERE video_id = ?')
+        .bind(videoId)
+        .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
+      if (existing) {
+        const cachedAudio = await env.WEDDING_KV.get(`audio:${existing.asset_id}`, 'arrayBuffer');
+        if (cachedAudio) {
+          return jsonResponse(request, AssetSchema.parse({
+            assetId: existing.asset_id,
+            durationSeconds: existing.duration_seconds,
+            peaks: JSON.parse(existing.peaks_json),
+          }));
+        }
+      }
+      const tunnelUrl = await env.WEDDING_KV.get('config:tunnel_url', 'text');
+      if (!tunnelUrl || !env.WEDDING_API_KEY) {
+        return errorResponse(request, 502, 'TUNNEL_OFFLINE', 'Chưa thể tải bài mới từ YouTube lúc này. Bạn có thể bấm "📁 Chọn file nhạc" để tải file MP3 từ máy lên.');
+      }
+      try {
+        const prepResp = await fetch(`${tunnelUrl}/api/prepare-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.WEDDING_API_KEY}` },
+          body: JSON.stringify({ videoId }),
+        });
+        if (!prepResp.ok) throw new Error(`Bridge HTTP ${prepResp.status}`);
+        const asset = AssetSchema.parse(await prepResp.json());
+        const audioResp = await fetch(`${tunnelUrl}/api/assets/${asset.assetId}/audio`, {
+          headers: { Authorization: `Bearer ${env.WEDDING_API_KEY}` },
+        });
+        if (!audioResp.ok) throw new Error(`Audio HTTP ${audioResp.status}`);
+        const audioBytes = await audioResp.arrayBuffer();
+        await env.WEDDING_KV.put(`audio:${asset.assetId}`, audioBytes);
+        await env.wedding_music_db
+          .prepare(
+            `INSERT INTO cloud_assets (asset_id, video_id, duration_seconds, peaks_json, created_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(asset_id) DO UPDATE SET
+               video_id = excluded.video_id,
+               duration_seconds = excluded.duration_seconds,
+               peaks_json = excluded.peaks_json`,
+          )
+          .bind(asset.assetId, videoId, asset.durationSeconds, JSON.stringify(asset.peaks), Date.now())
+          .run();
+        return jsonResponse(request, asset);
+      } catch {
+        return errorResponse(request, 502, 'SOURCE_ERROR', 'Không tải được âm thanh YouTube này. Hãy thử ứng viên khác hoặc chọn file nhạc từ máy.');
+      }
+    }
+
     const byVideoMatch = /^\/api\/cloud-assets\/by-video\/([A-Za-z0-9_-]{11})$/.exec(url.pathname);
     if (byVideoMatch && request.method === 'GET') {
       const row = await env.wedding_music_db
@@ -229,7 +322,7 @@ export default {
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
       if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh trên Cloudflare.');
       const audio = await env.WEDDING_KV.get(`audio:${row.asset_id}`, 'arrayBuffer');
-      if (!audio) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
+      if (!audio) return errorResponse(404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
       return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,
@@ -245,7 +338,7 @@ export default {
         .prepare('SELECT asset_id, duration_seconds, peaks_json FROM cloud_assets WHERE asset_id = ?')
         .bind(id)
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
-      if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
+      if (!row) return errorResponse(404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
       return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,

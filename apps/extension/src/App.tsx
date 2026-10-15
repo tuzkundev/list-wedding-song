@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Asset, Health } from '@wedding/shared/api';
+import type { Asset } from '@wedding/shared/api';
 import { formatTimestamp, getEditErrors } from '@wedding/shared/edit';
 import { buildSearchQuery, cleanTitleText, extractTrailingNote, parsePlaylist, PlaylistSchema, sanitizeSearchQuery, type ParseResult, type Playlist, type Track } from '@wedding/shared/playlist';
-import { exportPlaylistZip, fetchBlobUrl, forEachConcurrent, getAsset, getHealth, prepareTrackAudio, search, uploadCustomAudioFile } from './api';
+import { exportPlaylistZip, fetchBlobUrl, forEachConcurrent, getAsset, getShareLink, prepareTrackAudio, search, uploadCustomAudioFile } from './api';
 import { previewAudio, TrackEditor } from './components/TrackEditor';
 import { readStorage, writeStorage } from './storage';
 
@@ -10,18 +10,13 @@ const STATE_KEY = 'playlistState', NOTICE_KEY = 'rightsAccepted';
 const SAMPLE_PLAYLIST = `Nhạc cưới\n1. Đón khách\n+ Hơn cả yêu\n• Perfect violin & piano instrumental\n2) MC mở đầu\nVideo câu chuyện tình yêu\n3. Cô dâu tiến vào lễ đường (1:07–2:10)\nA thousand years- Phiên bản cinematic orchestral\n(phần cao trào)`;
 
 export default function App() {
-  const [health, setHealth] = useState<Health | null>(null), [connError, setConnError] = useState<string | null>(null);
+  const [copiedShare, setCopiedShare] = useState(false);
   const [text, setText] = useState(''), [parseErrors, setParseErrors] = useState<ParseResult['errors']>([]), [playlist, setPlaylist] = useState<Playlist | null>(null), [dirty, setDirty] = useState(false);
   const [assets, setAssets] = useState<Record<string, Asset>>({}), [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
   const [trackBusy, setTrackBusy] = useState<Record<string, string>>({}), [trackErrors, setTrackErrors] = useState<Record<string, string>>({});
   const [rightsAccepted, setRightsAccepted] = useState(true), [exportStatus, setExportStatus] = useState<{ text: string; snapshotChanged: boolean } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), abortRef = useRef(new AbortController()), exportSnapshotRef = useRef<string | null>(null), audioUrlsRef = useRef(audioUrls), restoredRef = useRef(false);
   audioUrlsRef.current = audioUrls;
-
-  const checkHelper = useCallback(async () => {
-    try { const next = await getHealth(); setHealth(next); setConnError(next.ready ? null : 'Helper thiếu công cụ cần thiết.'); return next; }
-    catch (error) { setHealth(null); setConnError(error instanceof Error ? error.message : 'Không kết nối được helper.'); return null; }
-  }, []);
 
   const verifySavedAssets = useCallback(async (current: Playlist) => {
     const musicTracks = current.sections.flatMap(section => section.tracks).filter(track => track.kind === 'music' && track.assetId);
@@ -31,7 +26,6 @@ export default function App() {
         setAssets(prev => ({ ...prev, [asset.assetId]: asset })); setAudioUrls(prev => ({ ...prev, [asset.assetId]: url }));
       } catch {
         setPlaylist(prev => prev && ({ ...prev, sections: prev.sections.map(s => ({ ...s, tracks: s.tracks.map(t => t.id === track.id ? { ...t, assetId: null, confirmed: false } : t) })) }));
-        setTrackErrors(prev => ({ ...prev, [track.id]: 'File âm thanh đã chuẩn bị không còn trên máy. Hãy nhấn Nghe thử để chuẩn bị lại.' }));
       }
     });
   }, []);
@@ -93,20 +87,13 @@ export default function App() {
         setPlaylist(initialPlaylist);
       }
       restoredRef.current = true;
-      const currentHealth = await checkHelper();
-      if (currentHealth?.ready && initialPlaylist) {
+      if (initialPlaylist) {
         await verifySavedAssets(initialPlaylist);
         if (staleSearchTracks.length) await forEachConcurrent(staleSearchTracks, runTrackSearch);
       }
     })();
     return () => { controller.abort(); previewAudio.stop(true); Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url)); };
-  }, [checkHelper, runTrackSearch, verifySavedAssets]);
-
-  useEffect(() => {
-    if (health?.ready) return;
-    const timer = setInterval(() => { void checkHelper(); }, 3_000);
-    return () => clearInterval(timer);
-  }, [checkHelper, health?.ready]);
+  }, [runTrackSearch, verifySavedAssets]);
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -163,6 +150,7 @@ export default function App() {
     } catch (error) { setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Không chuẩn bị được âm thanh.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [track.id]: '' })); }
   };
+
   const handleUploadTrackFile = async (track: Track, file: File) => {
     previewAudio.unlock();
     setTrackBusy(prev => ({ ...prev, [track.id]: 'Đang phân tích file nhạc & lưu lên Cloudflare…' })); setTrackErrors(prev => ({ ...prev, [track.id]: '' }));
@@ -184,7 +172,7 @@ export default function App() {
 
   const allTracks = playlist?.sections.flatMap(section => section.tracks) ?? [], musicTracks = allTracks.filter(track => track.kind === 'music');
   const confirmedTracks = musicTracks.filter(track => track.confirmed && track.assetId && assets[track.assetId] && Object.keys(getEditErrors(track, assets[track.assetId].durationSeconds)).length === 0);
-  const canExport = Boolean(health?.ready && musicTracks.length > 0 && confirmedTracks.length === musicTracks.length);
+  const canExport = Boolean(musicTracks.length > 0 && confirmedTracks.length === musicTracks.length);
 
   const handleExport = async () => {
     if (!playlist || !canExport) return;
@@ -206,15 +194,25 @@ export default function App() {
         <div className="brand-block">
           <img src="./icons/icon-128.png" alt="" className="brand-icon" />
           <div>
-            <p className="brand-kicker">WEDDING AUDIO STUDIO · TỰ ĐỘNG KẾT NỐI CỤC BỘ</p>
+            <p className="brand-kicker">WEDDING AUDIO STUDIO · CLOUDFLARE</p>
             <h1 className="brand-name">Nhạc cưới theo mục</h1>
           </div>
         </div>
         <div className="token-bar">
-          <span className={`status-pill ${health?.ready ? 'ok' : 'warn'}`} role="status">
-            {health?.ready ? '● Đã tự động kết nối helper' : connError ?? 'Chưa kết nối (chạy npm run dev:helper)'}
-          </span>
-          {!health?.ready && <button type="button" onClick={() => void checkHelper()}>Thử kết nối lại</button>}
+          <span className="status-pill ok" role="status">☁️ Tự động lưu trên Cloudflare</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              void getShareLink().then(url => {
+                void navigator.clipboard.writeText(url);
+                setCopiedShare(true);
+                setTimeout(() => setCopiedShare(false), 2_500);
+              });
+            }}
+          >
+            {copiedShare ? '✓ Đã sao chép link chia sẻ!' : '🔗 Sao chép link chia sẻ cho bạn bè'}
+          </button>
         </div>
       </header>
 
@@ -223,7 +221,7 @@ export default function App() {
           <input id="rights-check" type="checkbox" checked={rightsAccepted} onChange={e => { setRightsAccepted(e.target.checked); void writeStorage(NOTICE_KEY, e.target.checked); }} />
           <span>Tôi xác nhận chỉ tải và xử lý nội dung âm thanh mà mình có quyền sử dụng.</span>
         </label>
-        <span className="notice-chip">Chuẩn xuất: MP3 · 192 kbps · Chia theo thư mục</span>
+        <span className="notice-chip">Chuẩn xuất: MP3 / WAV · Chia theo thư mục ZIP</span>
       </section>
 
       <section className="composer-card" aria-labelledby="input-heading">
@@ -253,7 +251,7 @@ export default function App() {
             setPlaylist(res.playlist); setDirty(false);
             clearTimeout(saveTimer.current); void writeStorage(STATE_KEY, { text, playlist: res.playlist });
           }}>Phân tích danh sách</button>
-          <button type="button" className="secondary-button" disabled={!health?.ready || !musicTracks.length} onClick={() => void forEachConcurrent(musicTracks, runTrackSearch)}>Tìm nhạc cho {musicTracks.length} bài</button>
+          <button type="button" className="secondary-button" disabled={!musicTracks.length} onClick={() => void forEachConcurrent(musicTracks, runTrackSearch)}>Tìm nhạc cho {musicTracks.length} bài</button>
           {(playlist !== null || text.trim().length > 0) && (
             <button type="button" className="danger-ghost-btn" onClick={handleResetAll}>↻ Làm mới tất cả</button>
           )}
@@ -300,7 +298,7 @@ export default function App() {
                         <>
                           <div className="search-row">
                             <label>Query tìm kiếm<input value={track.query} onChange={e => updateTrack(track.id, { query: e.target.value })} /></label>
-                            <button type="button" disabled={!health?.ready || Boolean(trackBusy[track.id])} onClick={() => void runTrackSearch(track)}>Tìm lại</button>
+                            <button type="button" disabled={Boolean(trackBusy[track.id])} onClick={() => void runTrackSearch(track)}>Tìm lại</button>
                             <label className="ghost-button file-upload-btn" title="Tải file nhạc MP3/WAV từ máy lên Cloudflare để cắt">
                               📁 Chọn file nhạc
                               <input type="file" accept="audio/*" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void handleUploadTrackFile(track, f); e.currentTarget.value = ''; }} />
@@ -309,7 +307,7 @@ export default function App() {
                           </div>
 
                           {trackBusy[track.id] && <p className="busy-note" role="status"><span className="spinner-dot" aria-hidden="true" /> {trackBusy[track.id]}</p>}
-                          {trackErrors[track.id] && <p className="field-error" role="alert">{trackErrors[track.id]} <button type="button" disabled={!health?.ready} onClick={() => void (track.candidates.length ? prepareAndPlay(track) : runTrackSearch(track))}>Thử lại</button></p>}
+                          {trackErrors[track.id] && <p className="field-error" role="alert">{trackErrors[track.id]} <button type="button" onClick={() => void (track.candidates.length ? prepareAndPlay(track) : runTrackSearch(track))}>Thử lại</button></p>}
 
                           {track.candidates.length > 0 && (
                             <div className="candidate-box">
@@ -323,7 +321,7 @@ export default function App() {
                                   </select>
                                 </label>
                                 <div className="candidate-actions">
-                                  <button type="button" className="listen-button" disabled={!health?.ready || Boolean(trackBusy[track.id])} onClick={() => void prepareAndPlay(track)}>Nghe thử</button>
+                                  <button type="button" className="listen-button" disabled={Boolean(trackBusy[track.id])} onClick={() => void prepareAndPlay(track)}>Nghe thử</button>
                                   {candidate && <a className="yt-link" href={candidate.webpageUrl} target="_blank" rel="noreferrer">Mở YouTube gốc</a>}
                                 </div>
                               </div>

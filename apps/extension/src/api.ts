@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AssetSchema, ErrorSchema, HealthSchema, JobAcceptedSchema, JobSchema, SearchResponseSchema, type Asset, type ExportRequest, type Health, type Job } from '@wedding/shared/api';
 import { analyzeAudioBufferInBrowser, renderExportZipInBrowser } from './browserAudio';
-import { resolveCloudKey } from './storage';
+import { getWorkspaceId, resolveCloudKey } from './storage';
 
 const LOCAL_BASE = 'http://127.0.0.1:43127/api';
 const CLOUD_BASE = '/api';
@@ -21,6 +21,7 @@ async function fetchFromBase(base: string, path: string, options: RequestInit = 
     if (base === CLOUD_BASE) {
       const cloudKey = await resolveCloudKey();
       if (cloudKey) headers.set('Authorization', `Bearer ${cloudKey}`);
+      headers.set('X-Workspace-Id', getWorkspaceId());
     }
     response = await fetch(`${base}${path}`, { ...options, headers, signal: options.signal ?? AbortSignal.timeout(70_000) });
   } catch (error) {
@@ -47,14 +48,23 @@ async function requestBase<T>(base: string, path: string, schema: z.ZodType<T>, 
 }
 
 export async function getHealth(signal?: AbortSignal): Promise<Health> {
-  try {
-    return await requestBase(LOCAL_BASE, '/health', HealthSchema, undefined, signal ?? AbortSignal.timeout(2_500));
-  } catch {
-    if (hasCloudBackend()) {
-      return await requestBase(CLOUD_BASE, '/health', HealthSchema, undefined, signal);
+  if (hasCloudBackend()) {
+    try {
+      return await requestBase(CLOUD_BASE, '/health', HealthSchema, undefined, signal ?? AbortSignal.timeout(5_000));
+    } catch {
+      // Fall back to local helper check
     }
-    throw new ApiError('HELPER_OFFLINE', 'Chưa kết nối helper cục bộ.');
   }
+  return await requestBase(LOCAL_BASE, '/health', HealthSchema, undefined, signal ?? AbortSignal.timeout(2_500));
+}
+
+export async function getShareLink(): Promise<string> {
+  const key = await resolveCloudKey();
+  const shareKey = key ? key.slice(0, 16) : '';
+  const origin = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
+    ? window.location.origin
+    : 'https://list-wedding-song.nguyenqq611.workers.dev';
+  return shareKey ? `${origin}/#key=${shareKey}` : origin;
 }
 
 export async function search(query: string, signal?: AbortSignal) {
@@ -121,16 +131,26 @@ export async function prepareTrackAudio(videoId: string, signal: AbortSignal): P
       const cloudAudio = await fetchFromBase(CLOUD_BASE, `/cloud-assets/${cloudAsset.assetId}/audio`, { signal });
       return { asset: cloudAsset, audioUrl: URL.createObjectURL(await cloudAudio.blob()) };
     } catch {
-      // Not yet in Cloudflare KV/D1; download via helper and sync to Cloudflare
+      // Not cached in Cloudflare yet
     }
   }
-  const accepted = await startAssetJob(videoId);
-  const result = await pollJob(accepted.jobId, signal);
-  if (!('assetId' in result)) throw new ApiError('INVALID_JOB', 'Kết quả tải âm thanh không hợp lệ.');
-  const localAudioResp = await fetchFromBase(LOCAL_BASE, `/assets/${result.assetId}/audio`, { signal: AbortSignal.timeout(300_000) });
-  const blob = await localAudioResp.blob();
-  void syncAssetToCloudflare(videoId, result, blob);
-  return { asset: result, audioUrl: URL.createObjectURL(blob) };
+
+  try {
+    const accepted = await startAssetJob(videoId);
+    const result = await pollJob(accepted.jobId, signal);
+    if (!('assetId' in result)) throw new ApiError('INVALID_JOB', 'Kết quả tải âm thanh không hợp lệ.');
+    const localAudioResp = await fetchFromBase(LOCAL_BASE, `/assets/${result.assetId}/audio`, { signal: AbortSignal.timeout(300_000) });
+    const blob = await localAudioResp.blob();
+    void syncAssetToCloudflare(videoId, result, blob);
+    return { asset: result, audioUrl: URL.createObjectURL(blob) };
+  } catch {
+    if (hasCloudBackend()) {
+      const bridgedAsset = await requestBase(CLOUD_BASE, '/prepare-youtube', AssetSchema, { videoId }, AbortSignal.timeout(180_000));
+      const cloudAudio = await fetchFromBase(CLOUD_BASE, `/cloud-assets/${bridgedAsset.assetId}/audio`, { signal });
+      return { asset: bridgedAsset, audioUrl: URL.createObjectURL(await cloudAudio.blob()) };
+    }
+    throw new ApiError('SOURCE_ERROR', 'Không tải được âm thanh YouTube này. Hãy thử lại hoặc chọn file nhạc từ máy.');
+  }
 }
 
 export async function uploadCustomAudioFile(file: File, videoId?: string): Promise<{ asset: Asset; audioUrl: string }> {
@@ -165,7 +185,7 @@ export async function pollJob(jobId: string, signal: AbortSignal, onTick?: (job:
     let job: Job;
     try { job = await getJob(jobId, signal); }
     catch (error) {
-      if (error instanceof ApiError && error.status === 404) throw new ApiError('JOB_INTERRUPTED', 'Tác vụ bị gián đoạn (helper đã khởi động lại). Hãy chạy lại.');
+      if (error instanceof ApiError && error.status === 404) throw new ApiError('JOB_INTERRUPTED', 'Tác vụ bị gián đoạn. Hãy chạy lại.');
       throw error;
     }
     onTick?.(job);

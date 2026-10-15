@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import express, { Router, type ErrorRequestHandler, type Request, type Response, type Router as ExpressRouter } from 'express';
 import { HealthSchema, type Health } from '@wedding/shared/api';
 import { DEVELOPMENT_ORIGIN, HELPER_HOST, HELPER_PORT, HELPER_VERSION, type HelperConfig } from './config.js';
@@ -24,7 +25,7 @@ export function createApp(
   const app = express();
   const expectedHost = `${HELPER_HOST}:${HELPER_PORT}`;
   const allowedDevOrigin = config.devOrigin === DEVELOPMENT_ORIGIN ? DEVELOPMENT_ORIGIN : null;
-
+  const expectedCloudKey = config.cloudKey ? Buffer.from(config.cloudKey, 'utf8') : null;
   app.disable('x-powered-by');
   app.set('trust proxy', false);
   app.use((request, response, next) => {
@@ -43,6 +44,19 @@ export function createApp(
     if (request.method === 'OPTIONS') {
       handlePreflight(request, response, origin, allowedDevOrigin);
       return;
+    }
+
+    const isTunneled = Boolean(
+      request.headers['cf-ray'] ||
+      request.headers['cf-connecting-ip'] ||
+      request.headers['x-forwarded-for'] ||
+      request.headers['cdn-loop'],
+    );
+    if (isTunneled) {
+      if (request.path === '/api/cloud-key' || !expectedCloudKey || !hasValidBearer(request.get('authorization'), expectedCloudKey)) {
+        response.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Yêu cầu qua tunnel không hợp lệ.' } });
+        return;
+      }
     }
 
     if (origin) {
@@ -66,8 +80,13 @@ export function createApp(
       version: HELPER_VERSION,
     }));
   });
-  healthRouter.get('/cloud-key', (_request, response) => {
-    response.json({ cloudKey: config.cloudKey });
+  healthRouter.get('/cloud-key', (request, response) => {
+    const origin = request.get('origin');
+    if (!origin || !isAllowedOrigin(origin, allowedDevOrigin)) {
+      response.status(403).json({ error: { code: 'FORBIDDEN', message: 'Chỉ cho phép trình duyệt cục bộ.' } });
+      return;
+    }
+    response.json({ cloudKey: config.cloudKey, shareKey: config.cloudKey ? config.cloudKey.slice(0, 16) : null });
   });
   app.use('/api', healthRouter);
   if (router) app.use('/api', router);
@@ -102,6 +121,13 @@ export const safeErrorHandler: ErrorRequestHandler = (error: unknown, _request, 
   console.error(error);
   response.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Đã xảy ra lỗi nội bộ.' } });
 };
+function hasValidBearer(authorization: string | undefined, expected: Buffer): boolean {
+  const supplied = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : '';
+  const sameLen = Buffer.byteLength(supplied, 'utf8') === expected.length;
+  const candidate = sameLen ? Buffer.from(supplied, 'utf8') : Buffer.alloc(expected.length);
+  const matches = timingSafeEqual(candidate, expected);
+  return sameLen && matches;
+}
 
 const CLOUDFLARE_APP_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*list-wedding-song\.[a-z0-9-]+\.workers\.dev$|^https:\/\/(?:[a-z0-9-]+\.)*list-wedding-song\.pages\.dev$/;
 function isAllowedOrigin(origin: string, devOrigin: string | null): boolean {
