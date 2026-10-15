@@ -66,6 +66,9 @@ export function createApp(
       version: HELPER_VERSION,
     }));
   });
+  healthRouter.get('/cloud-key', (_request, response) => {
+    response.json({ cloudKey: config.cloudKey });
+  });
   app.use('/api', healthRouter);
   if (router) app.use('/api', router);
 

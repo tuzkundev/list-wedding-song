@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -14,6 +14,7 @@ export interface HelperConfig {
   assetsDir: string;
   exportsDir: string;
   devOrigin: typeof DEVELOPMENT_ORIGIN | null;
+  cloudKey: string | null;
 }
 
 export interface LoadConfigOptions {
@@ -30,6 +31,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Helpe
   await ensurePrivateDirectory(assetsDir);
   await ensurePrivateDirectory(exportsDir);
 
+  const cloudKey = await readFile(join(dataDir, 'cloud-key'), 'utf8').then(s => s.trim() || null).catch(() => null);
   const env = options.env ?? process.env;
   return {
     host: HELPER_HOST,
@@ -38,6 +40,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Helpe
     assetsDir,
     exportsDir,
     devOrigin: env.WEDDING_DEV_ORIGIN === '0' ? null : DEVELOPMENT_ORIGIN,
+    cloudKey,
   };
 }
 

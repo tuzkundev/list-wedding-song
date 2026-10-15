@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AssetSchema, ErrorSchema, HealthSchema, JobAcceptedSchema, JobSchema, SearchResponseSchema, type Asset, type ExportRequest, type Health, type Job } from '@wedding/shared/api';
 import { analyzeAudioBufferInBrowser, renderExportZipInBrowser } from './browserAudio';
+import { resolveCloudKey } from './storage';
 
 const LOCAL_BASE = 'http://127.0.0.1:43127/api';
 const CLOUD_BASE = '/api';
@@ -16,7 +17,12 @@ export class ApiError extends Error {
 async function fetchFromBase(base: string, path: string, options: RequestInit = {}): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, { ...options, signal: options.signal ?? AbortSignal.timeout(70_000) });
+    const headers = new Headers(options.headers);
+    if (base === CLOUD_BASE) {
+      const cloudKey = await resolveCloudKey();
+      if (cloudKey) headers.set('Authorization', `Bearer ${cloudKey}`);
+    }
+    response = await fetch(`${base}${path}`, { ...options, headers, signal: options.signal ?? AbortSignal.timeout(70_000) });
   } catch (error) {
     if (options.signal?.aborted) throw error;
     throw new ApiError('HELPER_OFFLINE', 'Không kết nối được dịch vụ xử lý.');
@@ -93,12 +99,12 @@ export async function fetchBlobUrl(path: string): Promise<string> {
 export async function syncAssetToCloudflare(videoId: string, asset: Asset, audioBlob: Blob): Promise<void> {
   if (!hasCloudBackend()) return;
   try {
-    await fetch(`${CLOUD_BASE}/cloud-assets/${asset.assetId}`, {
+    await fetchFromBase(CLOUD_BASE, `/cloud-assets/${asset.assetId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId, durationSeconds: asset.durationSeconds, peaks: asset.peaks }),
     });
-    await fetch(`${CLOUD_BASE}/cloud-assets/${asset.assetId}/audio`, {
+    await fetchFromBase(CLOUD_BASE, `/cloud-assets/${asset.assetId}/audio`, {
       method: 'PUT',
       headers: { 'Content-Type': 'audio/mpeg' },
       body: await audioBlob.arrayBuffer(),

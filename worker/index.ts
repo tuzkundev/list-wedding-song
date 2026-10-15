@@ -16,26 +16,45 @@ interface KVNamespace {
 interface Env {
   wedding_music_db: D1Database;
   WEDDING_KV: KVNamespace;
+  WEDDING_API_KEY?: string;
   ASSETS: { fetch(request: Request): Promise<Response> };
 }
 
-const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+const ALLOWED_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$|^https:\/\/(?:[a-z0-9-]+\.)*list-wedding-song\.[a-z0-9-]+\.workers\.dev$|^http:\/\/localhost:5173$/;
 
-function jsonResponse(body: unknown, status = 200): Response {
+function corsHeadersFor(request: Request): Record<string, string> {
+  const origin = request.headers.get('Origin');
+  if (!origin || !ALLOWED_ORIGIN.test(origin)) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    Vary: 'Origin',
+  };
+}
+
+function hasValidAuth(request: Request, expectedKey: string | undefined): boolean {
+  if (!expectedKey) return false;
+  const auth = request.headers.get('Authorization') ?? '';
+  const supplied = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
+  if (!supplied || supplied.length !== expectedKey.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expectedKey.length; ++i) {
+    diff |= supplied.charCodeAt(i) ^ expectedKey.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function jsonResponse(request: Request, body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', ...corsHeadersFor(request) },
   });
 }
 
-function errorResponse(status: number, code: string, message: string): Response {
-  return jsonResponse({ error: { code, message } }, status);
+function errorResponse(request: Request, status: number, code: string, message: string): Response {
+  return jsonResponse(request, { error: { code, message } }, status);
 }
-
 function parseDurationText(raw: string | undefined): number | null {
   if (!raw) return null;
   const parts = raw.trim().split(':').map(Number);
@@ -110,12 +129,19 @@ async function searchYouTubeInnerTube(query: string): Promise<Candidate[]> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    if (url.pathname.startsWith('/api/')) {
+      if (request.method === 'OPTIONS') {
+        const cors = corsHeadersFor(request);
+        if (!Object.keys(cors).length) return errorResponse(request, 403, 'INVALID_ORIGIN', 'Nguồn gửi yêu cầu không được phép.');
+        return new Response(null, { status: 204, headers: cors });
+      }
+      if (!hasValidAuth(request, env.WEDDING_API_KEY)) {
+        return errorResponse(request, 401, 'UNAUTHORIZED', 'Yêu cầu xác thực để truy cập dữ liệu Cloudflare.');
+      }
     }
 
     if (url.pathname === '/api/health' && request.method === 'GET') {
-      return jsonResponse(HealthSchema.parse({
+      return jsonResponse(request, HealthSchema.parse({
         ready: true,
         dependencies: {
           ytDlp: { available: true, version: 'cloudflare-innertube', error: null },
@@ -125,16 +151,15 @@ export default {
         version: '2.0.0-cloudflare',
       }));
     }
-
     if (url.pathname === '/api/state' && request.method === 'GET') {
       const row = await env.wedding_music_db
         .prepare('SELECT text_content, playlist_json, rights_accepted, updated_at FROM playlists_state WHERE id = ?')
         .bind('default')
         .first<{ text_content: string; playlist_json: string | null; rights_accepted: number; updated_at: number }>();
       if (!row) {
-        return jsonResponse({ text: '', playlist: null, rightsAccepted: true, updatedAt: 0 });
+        return jsonResponse(request, { text: '', playlist: null, rightsAccepted: true, updatedAt: 0 });
       }
-      return jsonResponse({
+      return jsonResponse(request, {
         text: row.text_content,
         playlist: row.playlist_json ? JSON.parse(row.playlist_json) : null,
         rightsAccepted: Boolean(row.rights_accepted),
@@ -144,7 +169,7 @@ export default {
 
     if (url.pathname === '/api/state' && request.method === 'PUT') {
       const body = (await request.json().catch(() => null)) as { text?: string; playlist?: unknown; rightsAccepted?: boolean } | null;
-      if (!body || typeof body !== 'object') return errorResponse(400, 'INVALID_INPUT', 'Dữ liệu trạng thái không hợp lệ.');
+      if (!body || typeof body !== 'object') return errorResponse(request, 400, 'INVALID_INPUT', 'Dữ liệu trạng thái không hợp lệ.');
       const text = typeof body.text === 'string' ? body.text : '';
       const playlistJson = body.playlist ? JSON.stringify(body.playlist) : null;
       const rightsAccepted = body.rightsAccepted === false ? 0 : 1;
@@ -161,12 +186,12 @@ export default {
         )
         .bind('default', text, playlistJson, rightsAccepted, now)
         .run();
-      return jsonResponse({ ok: true, updatedAt: now });
+      return jsonResponse(request, { ok: true, updatedAt: now });
     }
 
     if (url.pathname === '/api/search' && request.method === 'POST') {
       const parsed = SearchRequestSchema.safeParse(await request.json().catch(() => null));
-      if (!parsed.success) return errorResponse(400, 'INVALID_INPUT', 'Query tìm kiếm không hợp lệ.');
+      if (!parsed.success) return errorResponse(request, 400, 'INVALID_INPUT', 'Query tìm kiếm không hợp lệ.');
       const cleanQuery = sanitizeSearchQuery(parsed.data.query) || parsed.data.query;
       const cached = await env.wedding_music_db
         .prepare('SELECT candidates_json, updated_at FROM search_cache WHERE query = ?')
@@ -175,7 +200,7 @@ export default {
       if (cached && Date.now() - cached.updated_at < 7 * 24 * 3600 * 1000) {
         const candidates = JSON.parse(cached.candidates_json) as unknown;
         const valid = SearchResponseSchema.safeParse({ candidates });
-        if (valid.success && valid.data.candidates.length > 0) return jsonResponse(valid.data);
+        if (valid.success && valid.data.candidates.length > 0) return jsonResponse(request, valid.data);
       }
       try {
         const candidates = await searchYouTubeInnerTube(cleanQuery);
@@ -190,9 +215,9 @@ export default {
             .bind(cleanQuery, JSON.stringify(result.candidates), Date.now())
             .run();
         }
-        return jsonResponse(result);
+        return jsonResponse(request, result);
       } catch {
-        return errorResponse(502, 'SOURCE_ERROR', 'Không tìm kiếm được trên YouTube. Hãy thử lại.');
+        return errorResponse(request, 502, 'SOURCE_ERROR', 'Không tìm kiếm được trên YouTube. Hãy thử lại.');
       }
     }
 
@@ -202,10 +227,10 @@ export default {
         .prepare('SELECT asset_id, duration_seconds, peaks_json FROM cloud_assets WHERE video_id = ?')
         .bind(byVideoMatch[1])
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
-      if (!row) return errorResponse(404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh trên Cloudflare.');
+      if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh trên Cloudflare.');
       const audio = await env.WEDDING_KV.get(`audio:${row.asset_id}`, 'arrayBuffer');
-      if (!audio) return errorResponse(404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
-      return jsonResponse(AssetSchema.parse({
+      if (!audio) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
+      return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,
         peaks: JSON.parse(row.peaks_json),
@@ -215,13 +240,13 @@ export default {
     const assetMetaMatch = /^\/api\/(?:cloud-)?assets\/([0-9a-fA-F-]{36})$/.exec(url.pathname);
     if (assetMetaMatch && request.method === 'GET') {
       const id = assetMetaMatch[1];
-      if (!IdSchema.safeParse(id).success) return errorResponse(400, 'INVALID_ID', 'Mã âm thanh không hợp lệ.');
+      if (!IdSchema.safeParse(id).success) return errorResponse(request, 400, 'INVALID_ID', 'Mã âm thanh không hợp lệ.');
       const row = await env.wedding_music_db
         .prepare('SELECT asset_id, duration_seconds, peaks_json FROM cloud_assets WHERE asset_id = ?')
         .bind(id)
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
-      if (!row) return errorResponse(404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
-      return jsonResponse(AssetSchema.parse({
+      if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
+      return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,
         peaks: JSON.parse(row.peaks_json),
@@ -234,7 +259,7 @@ export default {
       const parsedAsset = AssetSchema.safeParse({ assetId: id, durationSeconds: body?.durationSeconds, peaks: body?.peaks });
       const parsedVideoId = VideoIdSchema.safeParse(body?.videoId);
       if (!parsedAsset.success || !parsedVideoId.success) {
-        return errorResponse(400, 'INVALID_ASSET', 'Metadata âm thanh không hợp lệ.');
+        return errorResponse(request, 400, 'INVALID_ASSET', 'Metadata âm thanh không hợp lệ.');
       }
       await env.wedding_music_db
         .prepare(
@@ -247,20 +272,20 @@ export default {
         )
         .bind(id, parsedVideoId.data, parsedAsset.data.durationSeconds, JSON.stringify(parsedAsset.data.peaks), Date.now())
         .run();
-      return jsonResponse(parsedAsset.data);
+      return jsonResponse(request, parsedAsset.data);
     }
 
     const assetAudioMatch = /^\/api\/(?:cloud-)?assets\/([0-9a-fA-F-]{36})\/audio$/.exec(url.pathname);
     if (assetAudioMatch && request.method === 'GET') {
       const id = assetAudioMatch[1];
       const audio = await env.WEDDING_KV.get(`audio:${id}`, 'arrayBuffer');
-      if (!audio) return errorResponse(404, 'ASSET_NOT_FOUND', 'File âm thanh không có trên Cloudflare KV.');
+      if (!audio) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'File âm thanh không có trên Cloudflare KV.');
       return new Response(audio, {
         status: 200,
         headers: {
           'Content-Type': 'audio/mpeg',
-          'Cache-Control': 'public, max-age=31536000, immutable',
-          ...CORS_HEADERS,
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          ...corsHeadersFor(request),
         },
       });
     }
@@ -269,14 +294,14 @@ export default {
       const id = assetAudioMatch[1];
       const buf = await request.arrayBuffer();
       if (!buf.byteLength || buf.byteLength > 24 * 1024 * 1024) {
-        return errorResponse(400, 'INVALID_AUDIO', 'Dung lượng file âm thanh không hợp lệ (tối đa 24MB trên KV Free).');
+        return errorResponse(request, 400, 'INVALID_AUDIO', 'Dung lượng file âm thanh không hợp lệ (tối đa 24MB trên KV Free).');
       }
       await env.WEDDING_KV.put(`audio:${id}`, buf);
-      return jsonResponse({ ok: true, bytes: buf.byteLength });
+      return jsonResponse(request, { ok: true, bytes: buf.byteLength });
     }
 
     if (url.pathname.startsWith('/api/')) {
-      return errorResponse(404, 'NOT_FOUND', 'Không tìm thấy API được yêu cầu.');
+      return errorResponse(request, 404, 'NOT_FOUND', 'Không tìm thấy API được yêu cầu.');
     }
 
     return env.ASSETS.fetch(request);
