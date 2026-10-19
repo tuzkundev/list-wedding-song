@@ -341,7 +341,7 @@ export default {
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
       if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh trên Cloudflare.');
       const audio = await env.WEDDING_KV.get(`audio:${row.asset_id}`, 'arrayBuffer');
-      if (!audio) return errorResponse(404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
+      if (!audio) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'File âm thanh không còn trong KV.');
       return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,
@@ -357,7 +357,7 @@ export default {
         .prepare('SELECT asset_id, duration_seconds, peaks_json FROM cloud_assets WHERE asset_id = ?')
         .bind(id)
         .first<{ asset_id: string; duration_seconds: number; peaks_json: string }>();
-      if (!row) return errorResponse(404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
+      if (!row) return errorResponse(request, 404, 'ASSET_NOT_FOUND', 'Chưa có âm thanh này trên Cloudflare.');
       return jsonResponse(request, AssetSchema.parse({
         assetId: row.asset_id,
         durationSeconds: row.duration_seconds,

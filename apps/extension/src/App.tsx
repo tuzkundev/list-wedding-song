@@ -15,6 +15,7 @@ export default function App() {
   const [assets, setAssets] = useState<Record<string, Asset>>({}), [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
   const [trackBusy, setTrackBusy] = useState<Record<string, string>>({}), [trackErrors, setTrackErrors] = useState<Record<string, string>>({});
   const [rightsAccepted, setRightsAccepted] = useState(true), [exportStatus, setExportStatus] = useState<{ text: string; snapshotChanged: boolean } | null>(null);
+  const [activeEmbed, setActiveEmbed] = useState<{ trackId: string; videoId: string } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), abortRef = useRef(new AbortController()), exportSnapshotRef = useRef<string | null>(null), audioUrlsRef = useRef(audioUrls), restoredRef = useRef(false);
   audioUrlsRef.current = audioUrls;
 
@@ -117,6 +118,7 @@ export default function App() {
     setTrackBusy({});
     setTrackErrors({});
     setExportStatus(null);
+    setActiveEmbed(null);
     void writeStorage(STATE_KEY, { text: '', playlist: null });
   };
 
@@ -124,6 +126,7 @@ export default function App() {
     const targetVideoId = overrideVideoId ?? track.selectedVideoId;
     if (!targetVideoId) return;
     if (!rightsAccepted) { setTrackErrors(prev => ({ ...prev, [track.id]: 'Hãy xác nhận quyền sử dụng nội dung ở thanh thông báo trước khi tải âm thanh.' })); return; }
+    setActiveEmbed(null);
     previewAudio.unlock();
     setTrackBusy(prev => ({ ...prev, [track.id]: 'Đang tải và dựng sóng nhạc (waveform)…' })); setTrackErrors(prev => ({ ...prev, [track.id]: '' }));
     try {
@@ -314,8 +317,10 @@ export default function App() {
                               <div className="candidate-select-row">
                                 <label>Ứng viên YouTube (đề xuất đầu tiên, cần nghe và xác nhận thủ công)
                                   <select value={track.selectedVideoId ?? ''} onChange={e => {
+                                    const nextVid = e.target.value;
                                     if (track.assetId && audioUrls[track.assetId]) { URL.revokeObjectURL(audioUrls[track.assetId]); setAudioUrls(prev => { const next = { ...prev }; delete next[track.assetId!]; return next; }); }
-                                    updateTrack(track.id, { selectedVideoId: e.target.value, assetId: null, confirmed: false });
+                                    updateTrack(track.id, { selectedVideoId: nextVid, assetId: null, confirmed: false });
+                                    if (activeEmbed?.trackId === track.id) setActiveEmbed({ trackId: track.id, videoId: nextVid });
                                   }}>
                                     {track.candidates.map((c, idx) => <option key={c.videoId} value={c.videoId}>{idx === 0 ? '[Đề xuất] ' : ''}{c.title ?? c.videoId} — {c.channel ?? 'Không rõ kênh'} ({c.durationSeconds ? `${c.durationSeconds}s` : 'không rõ thời lượng'})</option>)}
                                   </select>
@@ -331,6 +336,8 @@ export default function App() {
                                   const selected = c.videoId === track.selectedVideoId;
                                   return (
                                     <div key={c.videoId} className={`candidate-pill ${selected ? 'is-selected' : ''}`} onClick={() => {
+                                      previewAudio.stop(true);
+                                      setActiveEmbed({ trackId: track.id, videoId: c.videoId });
                                       if (c.videoId === track.selectedVideoId) return;
                                       if (track.assetId && audioUrls[track.assetId]) { URL.revokeObjectURL(audioUrls[track.assetId]); setAudioUrls(prev => { const next = { ...prev }; delete next[track.assetId!]; return next; }); }
                                       updateTrack(track.id, { selectedVideoId: c.videoId, assetId: null, confirmed: false });
@@ -344,6 +351,26 @@ export default function App() {
                                   );
                                 })}
                               </div>
+
+                              {activeEmbed?.trackId === track.id && (
+                                <div className="yt-embed-box" aria-label="Trình phát YouTube nhúng">
+                                  <div className="yt-embed-header">
+                                    <span className="yt-embed-title">▶ {candidate?.title ?? activeEmbed.videoId}</span>
+                                    <button type="button" className="yt-embed-close" onClick={() => setActiveEmbed(null)}>Đóng video ✕</button>
+                                  </div>
+                                  <div className="yt-embed-frame-wrap">
+                                    <iframe
+                                      key={activeEmbed.videoId}
+                                      className="yt-embed-iframe"
+                                      src={`https://www.youtube.com/embed/${activeEmbed.videoId}?autoplay=1&rel=0`}
+                                      title={candidate?.title ?? `YouTube ${activeEmbed.videoId}`}
+                                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                      allowFullScreen
+                                      referrerPolicy="strict-origin-when-cross-origin"
+                                    />
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
 

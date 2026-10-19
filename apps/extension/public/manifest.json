@@ -25,6 +25,6 @@
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1:43127/*"],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:43127; media-src 'self' blob:"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' http://127.0.0.1:43127 https://list-wedding-song.nguyenqq611.workers.dev; media-src 'self' blob:"
   }
 }

@@ -28,10 +28,24 @@ export async function resolveCloudKey(): Promise<string | null> {
     return key;
   }
   const saved = localStorage.getItem(CLOUD_KEY_STORAGE);
-  if (saved && /^[a-f0-9]{16,64}$/i.test(saved)) return saved;
+  if (saved && /^[a-f0-9]{32,64}$/i.test(saved)) return saved;
 
   if (pendingKeyPromise) return pendingKeyPromise;
   pendingKeyPromise = (async () => {
+    try {
+      const resp = await fetch('http://127.0.0.1:43127/api/cloud-key', { signal: AbortSignal.timeout(1_200) });
+      if (resp.ok) {
+        const data = (await resp.json()) as { cloudKey?: string | null; shareKey?: string | null };
+        const key = data.cloudKey ?? data.shareKey ?? null;
+        if (key && /^[a-f0-9]{16,64}$/i.test(key)) {
+          localStorage.setItem(CLOUD_KEY_STORAGE, key);
+          return key;
+        }
+      }
+    } catch {
+      // Not on owner Mac
+    }
+    if (saved && /^[a-f0-9]{16,64}$/i.test(saved)) return saved;
     if (isWebEnvironment()) {
       try {
         const infoResp = await fetch('/api/share-info', { signal: AbortSignal.timeout(4_000) });
@@ -43,21 +57,8 @@ export async function resolveCloudKey(): Promise<string | null> {
           }
         }
       } catch {
-        // Ignore and try local helper
+        // Ignore
       }
-    }
-    try {
-      const resp = await fetch('http://127.0.0.1:43127/api/cloud-key', { signal: AbortSignal.timeout(1_500) });
-      if (resp.ok) {
-        const data = (await resp.json()) as { cloudKey?: string | null; shareKey?: string | null };
-        const key = data.cloudKey ?? data.shareKey ?? null;
-        if (key && /^[a-f0-9]{16,64}$/i.test(key)) {
-          localStorage.setItem(CLOUD_KEY_STORAGE, key);
-          return key;
-        }
-      }
-    } catch {
-      // Not on owner Mac
     }
     return null;
   })().finally(() => {
