@@ -362,7 +362,7 @@ export default function App() {
                                     <iframe
                                       key={activeEmbed.videoId}
                                       className="yt-embed-iframe"
-                                      src={`https://www.youtube.com/embed/${activeEmbed.videoId}?autoplay=1&rel=0`}
+                                      src={`https://www.youtube.com/embed/${activeEmbed.videoId}?autoplay=1&rel=0${typeof window !== 'undefined' && window.location.protocol.startsWith('http') ? `&origin=${encodeURIComponent(window.location.origin)}` : ''}`}
                                       title={candidate?.title ?? `YouTube ${activeEmbed.videoId}`}
                                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                                       allowFullScreen

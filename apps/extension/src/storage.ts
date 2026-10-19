@@ -17,18 +17,24 @@ export function getWorkspaceId(): string {
   }
   return id;
 }
+let memoryCachedKey: string | null = null;
 
 export async function resolveCloudKey(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
   const hashMatch = /(?:^|[#&?])key=([a-f0-9]{16,64})(?:&|$)/i.exec(window.location.hash || window.location.search);
   if (hashMatch) {
     const key = hashMatch[1];
+    memoryCachedKey = key;
     localStorage.setItem(CLOUD_KEY_STORAGE, key);
     window.history.replaceState(null, '', window.location.pathname);
     return key;
   }
+  if (memoryCachedKey) return memoryCachedKey;
   const saved = localStorage.getItem(CLOUD_KEY_STORAGE);
-  if (saved && /^[a-f0-9]{32,64}$/i.test(saved)) return saved;
+  if (saved && /^[a-f0-9]{16,64}$/i.test(saved)) {
+    memoryCachedKey = saved;
+    return saved;
+  }
 
   if (pendingKeyPromise) return pendingKeyPromise;
   pendingKeyPromise = (async () => {
@@ -38,6 +44,7 @@ export async function resolveCloudKey(): Promise<string | null> {
         const data = (await resp.json()) as { cloudKey?: string | null; shareKey?: string | null };
         const key = data.cloudKey ?? data.shareKey ?? null;
         if (key && /^[a-f0-9]{16,64}$/i.test(key)) {
+          memoryCachedKey = key;
           localStorage.setItem(CLOUD_KEY_STORAGE, key);
           return key;
         }
@@ -45,13 +52,13 @@ export async function resolveCloudKey(): Promise<string | null> {
     } catch {
       // Not on owner Mac
     }
-    if (saved && /^[a-f0-9]{16,64}$/i.test(saved)) return saved;
     if (isWebEnvironment()) {
       try {
         const infoResp = await fetch('/api/share-info', { signal: AbortSignal.timeout(4_000) });
         if (infoResp.ok) {
           const info = (await infoResp.json()) as { shareKey?: string | null };
           if (info.shareKey && /^[a-f0-9]{16,64}$/i.test(info.shareKey)) {
+            memoryCachedKey = info.shareKey;
             localStorage.setItem(CLOUD_KEY_STORAGE, info.shareKey);
             return info.shareKey;
           }
