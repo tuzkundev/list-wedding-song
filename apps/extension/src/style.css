@@ -352,6 +352,23 @@ textarea#playlist-input {
   gap: 10px;
   align-items: center;
 }
+.candidate-confirm-btn {
+  background: #10b981;
+  border-color: #059669;
+  color: #ffffff;
+  font-weight: 700;
+  padding: 8px 16px;
+}
+.candidate-confirm-btn:hover:not(:disabled) {
+  background: #059669;
+  border-color: #047857;
+}
+.candidate-confirm-btn.is-confirmed {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+  opacity: 1;
+}
 .listen-button {
   background: #062147;
   border-color: #062147;

@@ -173,17 +173,71 @@ export default function App() {
     }
   };
 
+  const isTrackConfirmable = (track: Track) => {
+    if (!track.selectedVideoId && !track.assetId) return false;
+    const asset = track.assetId ? assets[track.assetId] : undefined;
+    if (asset && Object.keys(getEditErrors(track, asset.durationSeconds)).length > 0) return false;
+    return true;
+  };
   const allTracks = playlist?.sections.flatMap(section => section.tracks) ?? [], musicTracks = allTracks.filter(track => track.kind === 'music');
-  const confirmedTracks = musicTracks.filter(track => track.confirmed && track.assetId && assets[track.assetId] && Object.keys(getEditErrors(track, assets[track.assetId].durationSeconds)).length === 0);
+  const confirmedTracks = musicTracks.filter(track => track.confirmed && isTrackConfirmable(track));
   const canExport = Boolean(musicTracks.length > 0 && confirmedTracks.length === musicTracks.length);
 
   const handleExport = async () => {
     if (!playlist || !canExport) return;
-    const body = { playlistId: playlist.id, sections: playlist.sections.map(s => ({ id: s.id, title: s.title, tracks: s.tracks.filter(t => t.kind === 'music').map(t => ({ id: t.id, title: t.title, assetId: t.assetId!, startSeconds: t.startSeconds, endSeconds: t.endSeconds!, fadeInSeconds: t.fadeInSeconds, fadeOutSeconds: t.fadeOutSeconds, confirmed: true as const })) })) };
-    exportSnapshotRef.current = JSON.stringify(body);
     setExportStatus({ text: `Đang chuẩn bị xuất 0/${musicTracks.length} bài…`, snapshotChanged: false });
     try {
-      const url = await exportPlaylistZip(body, audioUrls, abortRef.current.signal, (done, total) => setExportStatus(prev => ({ text: `Đang xuất ${done}/${total} bài…`, snapshotChanged: prev?.snapshotChanged ?? false })));
+      const resolvedAssets: Record<string, Asset> = { ...assets };
+      const resolvedAudioUrls: Record<string, string> = { ...audioUrls };
+      const trackAssetMap: Record<string, { assetId: string; endSeconds: number }> = {};
+
+      let prepCount = 0;
+      const needPrep = musicTracks.filter(t => !t.assetId || !resolvedAssets[t.assetId] || !resolvedAudioUrls[t.assetId]);
+      for (const t of musicTracks) {
+        let asset = t.assetId ? resolvedAssets[t.assetId] : undefined;
+        let url = t.assetId ? resolvedAudioUrls[t.assetId] : undefined;
+        if (!asset || !url) {
+          if (!t.selectedVideoId) throw new Error(`Bài "${t.title}" chưa chọn video YouTube.`);
+          ++prepCount;
+          setExportStatus(prev => ({ text: `Đang tải nhạc chuẩn bị xuất (${prepCount}/${needPrep.length}): ${t.title}…`, snapshotChanged: prev?.snapshotChanged ?? false }));
+          const prepared = await prepareTrackAudio(t.selectedVideoId, abortRef.current.signal);
+          asset = prepared.asset;
+          url = prepared.audioUrl;
+          resolvedAssets[asset.assetId] = asset;
+          resolvedAudioUrls[asset.assetId] = url;
+          setAssets(prev => ({ ...prev, [asset!.assetId]: asset! }));
+          setAudioUrls(prev => ({ ...prev, [asset!.assetId]: url! }));
+        }
+        const endSeconds = t.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+        const errs = getEditErrors({ ...t, endSeconds }, asset.durationSeconds);
+        if (Object.keys(errs).length > 0) {
+          throw new Error(`Bài "${t.title}": ${Object.values(errs).join(' ')}`);
+        }
+        trackAssetMap[t.id] = { assetId: asset.assetId, endSeconds };
+        if (t.assetId !== asset.assetId || t.endSeconds !== endSeconds) {
+          updateTrack(t.id, { assetId: asset.assetId, endSeconds, confirmed: true }, true);
+        }
+      }
+
+      const body = {
+        playlistId: playlist.id,
+        sections: playlist.sections.map(s => ({
+          id: s.id,
+          title: s.title,
+          tracks: s.tracks.filter(t => t.kind === 'music').map(t => ({
+            id: t.id,
+            title: t.title,
+            assetId: trackAssetMap[t.id].assetId,
+            startSeconds: t.startSeconds,
+            endSeconds: trackAssetMap[t.id].endSeconds,
+            fadeInSeconds: t.fadeInSeconds,
+            fadeOutSeconds: t.fadeOutSeconds,
+            confirmed: true as const,
+          })),
+        })),
+      };
+      exportSnapshotRef.current = JSON.stringify(body);
+      const url = await exportPlaylistZip(body, resolvedAudioUrls, abortRef.current.signal, (done, total) => setExportStatus(prev => ({ text: `Đang xuất ${done}/${total} bài…`, snapshotChanged: prev?.snapshotChanged ?? false })));
       const link = document.createElement('a'); link.href = url; link.download = 'nhac-cuoi.zip'; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setExportStatus(prev => ({ text: `Đã tải nhac-cuoi.zip (${musicTracks.length}/${musicTracks.length} bài).`, snapshotChanged: prev?.snapshotChanged ?? false }));
@@ -326,6 +380,14 @@ export default function App() {
                                   </select>
                                 </label>
                                 <div className="candidate-actions">
+                                  <button
+                                    type="button"
+                                    className={`candidate-confirm-btn ${track.confirmed ? 'is-confirmed' : ''}`}
+                                    disabled={Boolean(trackBusy[track.id]) || track.confirmed || !isTrackConfirmable(track)}
+                                    onClick={() => updateTrack(track.id, { confirmed: true }, true)}
+                                  >
+                                    {track.confirmed ? 'Đã xác nhận bản này' : 'Đúng bản này'}
+                                  </button>
                                   <button type="button" className="listen-button" disabled={Boolean(trackBusy[track.id])} onClick={() => void prepareAndPlay(track)}>Nghe thử</button>
                                   {candidate && <a className="yt-link" href={candidate.webpageUrl} target="_blank" rel="noreferrer">Mở YouTube gốc</a>}
                                 </div>
