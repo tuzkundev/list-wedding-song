@@ -31,34 +31,69 @@ export async function startHelper(): Promise<Server> {
   return server;
 }
 function startCloudflaredBridge(port: number, cloudKey: string): void {
-  try {
-    const child = spawn(
-      'cloudflared',
-      ['tunnel', '--no-autoupdate', '--http-host-header', `127.0.0.1:${port}`, '--url', `http://127.0.0.1:${port}`],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    const onChunk = (chunk: Buffer) => {
-      const text = chunk.toString('utf8');
-      const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(text);
-      if (match) {
-        const tunnelUrl = match[0];
-        void fetch('https://list-wedding-song.nguyenqq611.workers.dev/api/tunnel', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cloudKey}` },
-          body: JSON.stringify({ tunnelUrl }),
-        }).catch(() => undefined);
-      }
-    };
-    child.stdout?.on('data', onChunk);
-    child.stderr?.on('data', onChunk);
-    child.on('error', () => undefined);
-    const cleanup = () => { try { child.kill('SIGTERM'); } catch {} };
-    process.once('exit', cleanup);
-    process.once('SIGTERM', cleanup);
-    process.once('SIGINT', cleanup);
-  } catch {
-    // Optional cloudflared bridge
-  }
+  let activeChild: ReturnType<typeof spawn> | null = null;
+  let currentTunnelUrl: string | null = null;
+  let stopping = false;
+
+  const spawnTunnel = () => {
+    if (stopping) return;
+    try {
+      currentTunnelUrl = null;
+      const child = spawn(
+        'cloudflared',
+        ['tunnel', '--no-autoupdate', '--http-host-header', `127.0.0.1:${port}`, '--url', `http://127.0.0.1:${port}`],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      activeChild = child;
+      const onChunk = (chunk: Buffer) => {
+        const text = chunk.toString('utf8');
+        const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(text);
+        if (match && match[0] !== currentTunnelUrl) {
+          currentTunnelUrl = match[0];
+          void fetch('https://list-wedding-song.nguyenqq611.workers.dev/api/tunnel', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cloudKey}` },
+            body: JSON.stringify({ tunnelUrl: currentTunnelUrl }),
+          }).catch(() => undefined);
+        }
+      };
+      child.stdout?.on('data', onChunk);
+      child.stderr?.on('data', onChunk);
+      child.on('error', () => undefined);
+      child.on('exit', () => {
+        if (!stopping && activeChild === child) {
+          activeChild = null;
+          setTimeout(spawnTunnel, 5_000);
+        }
+      });
+    } catch {
+      // Optional cloudflared bridge
+    }
+  };
+
+  spawnTunnel();
+
+  const watchdog = setInterval(() => {
+    if (stopping || !currentTunnelUrl) return;
+    void fetch(`${currentTunnelUrl}/api/health`, {
+      headers: { Authorization: `Bearer ${cloudKey}` },
+      signal: AbortSignal.timeout(8_000),
+    }).then(res => {
+      if (!res.ok) throw new Error('Tunnel unhealthy');
+    }).catch(() => {
+      try { activeChild?.kill('SIGTERM'); } catch {}
+    });
+  }, 60_000);
+  watchdog.unref();
+
+  const cleanup = () => {
+    stopping = true;
+    clearInterval(watchdog);
+    try { activeChild?.kill('SIGTERM'); } catch {}
+  };
+  process.once('exit', cleanup);
+  process.once('SIGTERM', cleanup);
+  process.once('SIGINT', cleanup);
 }
 
 const entrypoint = process.argv[1] ? resolve(process.argv[1]) : '';

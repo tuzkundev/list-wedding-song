@@ -69,11 +69,22 @@ export async function getShareLink(): Promise<string> {
 
 export async function search(query: string, signal?: AbortSignal) {
   if (hasCloudBackend()) {
+    let cloudError: unknown = null;
     try {
       const cloudRes = await requestBase(CLOUD_BASE, '/search', SearchResponseSchema, { query }, signal);
       if (cloudRes.candidates.length > 0) return cloudRes;
+      try {
+        return await requestBase(LOCAL_BASE, '/search', SearchResponseSchema, { query }, AbortSignal.timeout(2_500));
+      } catch {
+        return cloudRes;
+      }
+    } catch (err) {
+      cloudError = err;
+    }
+    try {
+      return await requestBase(LOCAL_BASE, '/search', SearchResponseSchema, { query }, AbortSignal.timeout(2_500));
     } catch {
-      // Fallback to local helper
+      throw cloudError instanceof Error ? cloudError : new ApiError('SOURCE_ERROR', 'Không tìm kiếm được trên YouTube. Hãy thử lại.');
     }
   }
   return await requestBase(LOCAL_BASE, '/search', SearchResponseSchema, { query }, signal);
@@ -91,7 +102,7 @@ export async function getAsset(id: string): Promise<Asset> {
       // Fall back to local helper
     }
   }
-  return await requestBase(LOCAL_BASE, `/assets/${id}`, AssetSchema);
+  return await requestBase(LOCAL_BASE, `/assets/${id}`, AssetSchema, undefined, AbortSignal.timeout(2_500));
 }
 
 export async function fetchBlobUrl(path: string): Promise<string> {
@@ -103,7 +114,7 @@ export async function fetchBlobUrl(path: string): Promise<string> {
       // Fall back to local helper
     }
   }
-  return URL.createObjectURL(await (await fetchFromBase(LOCAL_BASE, path, { signal: AbortSignal.timeout(300_000) })).blob());
+  return URL.createObjectURL(await (await fetchFromBase(LOCAL_BASE, path, { signal: AbortSignal.timeout(15_000) })).blob());
 }
 
 export async function syncAssetToCloudflare(videoId: string, asset: Asset, audioBlob: Blob): Promise<void> {

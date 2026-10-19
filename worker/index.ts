@@ -50,7 +50,10 @@ function hasValidAuth(request: Request, expectedKey: string | undefined): boolea
   if (!expectedKey || expectedKey.length < 16) return false;
   const supplied = getSuppliedBearer(request);
   const shareKey = expectedKey.slice(0, 16);
-  return constantTimeEquals(supplied, expectedKey) || constantTimeEquals(supplied, shareKey);
+  if (constantTimeEquals(supplied, expectedKey) || constantTimeEquals(supplied, shareKey)) return true;
+  const origin = request.headers.get('Origin');
+  if (origin && !ALLOWED_ORIGIN.test(origin)) return false;
+  return request.headers.get('Sec-Fetch-Site') === 'same-origin';
 }
 
 function hasOwnerAuth(request: Request, expectedKey: string | undefined): boolean {
@@ -154,26 +157,28 @@ export default {
         if (!Object.keys(cors).length) return errorResponse(request, 403, 'INVALID_ORIGIN', 'Nguồn gửi yêu cầu không được phép.');
         return new Response(null, { status: 204, headers: cors });
       }
+      if (url.pathname === '/api/health' && request.method === 'GET') {
+        return jsonResponse(request, HealthSchema.parse({
+          ready: true,
+          dependencies: {
+            ytDlp: { available: true, version: 'cloudflare-innertube', error: null },
+            ffmpeg: { available: true, version: 'cloudflare-webaudio', error: null },
+            ffprobe: { available: true, version: 'cloudflare-webaudio', error: null },
+          },
+          version: '2.0.0-cloudflare',
+        }));
+      }
+      if (url.pathname === '/api/share-info' && request.method === 'GET') {
+        const origin = request.headers.get('Origin');
+        if (origin && !ALLOWED_ORIGIN.test(origin)) {
+          return errorResponse(request, 403, 'INVALID_ORIGIN', 'Nguồn gửi yêu cầu không được phép.');
+        }
+        const shareKey = env.WEDDING_API_KEY ? env.WEDDING_API_KEY.slice(0, 16) : '';
+        return jsonResponse(request, { shareKey });
+      }
       if (!hasValidAuth(request, env.WEDDING_API_KEY)) {
         return errorResponse(request, 401, 'UNAUTHORIZED', 'Hãy mở qua đường dẫn chia sẻ được cấp phép.');
       }
-    }
-
-    if (url.pathname === '/api/health' && request.method === 'GET') {
-      return jsonResponse(request, HealthSchema.parse({
-        ready: true,
-        dependencies: {
-          ytDlp: { available: true, version: 'cloudflare-innertube', error: null },
-          ffmpeg: { available: true, version: 'cloudflare-webaudio', error: null },
-          ffprobe: { available: true, version: 'cloudflare-webaudio', error: null },
-        },
-        version: '2.0.0-cloudflare',
-      }));
-    }
-
-    if (url.pathname === '/api/share-info' && request.method === 'GET') {
-      const shareKey = env.WEDDING_API_KEY ? env.WEDDING_API_KEY.slice(0, 16) : '';
-      return jsonResponse(request, { shareKey });
     }
 
     if (url.pathname === '/api/tunnel' && request.method === 'PUT') {
@@ -243,7 +248,21 @@ export default {
         if (valid.success && valid.data.candidates.length > 0) return jsonResponse(request, valid.data);
       }
       try {
-        const candidates = await searchYouTubeInnerTube(cleanQuery);
+        let candidates = await searchYouTubeInnerTube(cleanQuery).catch(() => [] as Candidate[]);
+        if (candidates.length === 0) {
+          const tunnelUrl = await env.WEDDING_KV.get('config:tunnel_url', 'text');
+          if (tunnelUrl && env.WEDDING_API_KEY) {
+            const bridgeResp = await fetch(`${tunnelUrl}/api/search`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.WEDDING_API_KEY}` },
+              body: JSON.stringify({ query: cleanQuery }),
+            }).catch(() => null);
+            if (bridgeResp?.ok) {
+              const parsedBridge = SearchResponseSchema.safeParse(await bridgeResp.json().catch(() => null));
+              if (parsedBridge.success) candidates = parsedBridge.data.candidates;
+            }
+          }
+        }
         const result = SearchResponseSchema.parse({ candidates });
         if (candidates.length > 0) {
           await env.wedding_music_db
