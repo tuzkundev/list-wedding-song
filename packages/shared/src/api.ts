@@ -6,7 +6,7 @@ const seconds = z.number().finite().nonnegative();
 export const ErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }).strict() }).strict();
 export const DependencySchema = z.object({ available: z.boolean(), version: z.string().nullable(), error: z.string().nullable() }).strict();
 export const HealthSchema = z.object({ ready: z.boolean(), dependencies: z.object({ ytDlp: DependencySchema, ffmpeg: DependencySchema, ffprobe: DependencySchema }).strict(), version: z.string() }).strict();
-export const SearchRequestSchema = z.object({ query: z.string().trim().min(1).max(500) }).strict();
+export const SearchRequestSchema = z.object({ query: z.string().trim().min(1) }).strict();
 export const CandidateSchema = z.object({
   videoId: VideoIdSchema, title: z.string().nullable(), channel: z.string().nullable(), durationSeconds: seconds.nullable(),
   thumbnailUrl: z.string().url().nullable(), webpageUrl: z.string().url(),
@@ -22,13 +22,13 @@ export const JobSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
 }).strict();
 export const ExportTrackSchema = z.object({
-  id: IdSchema, title: z.string().max(1000), assetId: IdSchema, startSeconds: seconds, endSeconds: seconds,
+  id: IdSchema, title: z.string(), assetId: IdSchema, startSeconds: seconds, endSeconds: seconds,
   fadeInSeconds: seconds, fadeOutSeconds: seconds, confirmed: z.literal(true),
 }).strict().superRefine((track, ctx) => {
   if (track.endSeconds <= track.startSeconds) ctx.addIssue({ code: 'custom', path: ['endSeconds'], message: 'Điểm kết thúc phải sau điểm bắt đầu.' });
   if (track.fadeInSeconds + track.fadeOutSeconds > track.endSeconds - track.startSeconds) ctx.addIssue({ code: 'custom', path: ['fadeOutSeconds'], message: 'Tổng fade vượt độ dài đoạn.' });
 });
-export const ExportRequestSchema = z.object({ playlistId: IdSchema, sections: z.array(z.object({ id: IdSchema, title: z.string().max(1000), tracks: z.array(ExportTrackSchema).max(1000) }).strict()).min(1).max(200) }).strict().refine(value => value.sections.some(section => section.tracks.length), 'Cần ít nhất một bài nhạc.');
+export const ExportRequestSchema = z.object({ playlistId: IdSchema, sections: z.array(z.object({ id: IdSchema, title: z.string(), tracks: z.array(ExportTrackSchema).max(1000) }).strict()).min(1).max(200) }).strict().refine(value => value.sections.some(section => section.tracks.length), 'Cần ít nhất một bài nhạc.');
 export type Candidate = z.infer<typeof CandidateSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type Job = z.infer<typeof JobSchema>;

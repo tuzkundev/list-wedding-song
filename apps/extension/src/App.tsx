@@ -137,7 +137,7 @@ export default function App() {
         asset = prepared.asset;
         setAssets(prev => ({ ...prev, [asset!.assetId]: asset! }));
         setAudioUrls(prev => ({ ...prev, [asset!.assetId]: prepared.audioUrl }));
-        const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+        const nextEnd = track.endSeconds ?? asset.durationSeconds;
         updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
         previewAudio.startMark = track.startSeconds;
         const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
@@ -145,7 +145,7 @@ export default function App() {
         return;
       }
       const url = audioUrls[asset.assetId];
-      const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+      const nextEnd = track.endSeconds ?? asset.durationSeconds;
       updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
       previewAudio.startMark = track.startSeconds;
       const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
@@ -161,7 +161,7 @@ export default function App() {
       const { asset, audioUrl } = await uploadCustomAudioFile(file, track.selectedVideoId ?? undefined);
       setAssets(prev => ({ ...prev, [asset.assetId]: asset }));
       setAudioUrls(prev => ({ ...prev, [asset.assetId]: audioUrl }));
-      const nextEnd = track.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+      const nextEnd = track.endSeconds ?? asset.durationSeconds;
       updateTrack(track.id, { assetId: asset.assetId, endSeconds: nextEnd, confirmed: false });
       previewAudio.startMark = track.startSeconds;
       const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
@@ -208,7 +208,7 @@ export default function App() {
           setAssets(prev => ({ ...prev, [asset!.assetId]: asset! }));
           setAudioUrls(prev => ({ ...prev, [asset!.assetId]: url! }));
         }
-        const endSeconds = t.endSeconds ?? Number(asset.durationSeconds.toFixed(1));
+        const endSeconds = t.endSeconds ?? asset.durationSeconds;
         const errs = getEditErrors({ ...t, endSeconds }, asset.durationSeconds);
         if (Object.keys(errs).length > 0) {
           throw new Error(`Bài "${t.title}": ${Object.values(errs).join(' ')}`);
@@ -285,7 +285,7 @@ export default function App() {
         <div className="composer-top">
           <div>
             <h2 id="input-heading">1. Dán danh sách và rà soát cấu trúc</h2>
-            <p className="composer-subtitle">Hỗ trợ tự nhận diện tên thư mục kèm bài đánh số (vd: <code>Đón khách 1. Hát cho em, 2. Ba kể con nghe</code>) hoặc mục đánh số <code>1.</code> / <code>1)</code> và khoảng thời gian <code>(1:07–2:10)</code>.</p>
+            <p className="composer-subtitle">Dán danh sách từ ghi chú, Word hoặc chat: tên mục có hoặc không đánh số, bài hát xuống dòng, đánh số hay gạch đầu dòng. Có thể viết <code>Đón khách: Hát cho em; Ba kể con nghe</code>. Hỗ trợ khoảng thời gian <code>(1:07–2:10)</code>; hãy rà soát cấu trúc trước khi tìm nhạc.</p>
           </div>
           <div className="composer-top-actions">
             {!text.trim() && (

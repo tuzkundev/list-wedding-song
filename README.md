@@ -35,10 +35,24 @@ Dữ liệu âm thanh và bản xuất nằm trong `~/.wedding-music`. Helper ch
 ## Sử dụng
 
 1. Đánh dấu xác nhận chỉ tải/xử lý nội dung có quyền sử dụng.
-2. Dán danh sách nhạc có mục đánh số `1.` / `1)` và khoảng thời gian `(m:ss–m:ss)`, nhấn **Phân tích danh sách**.
-3. Rà soát tiêu đề mục, tên dòng, query, đổi dòng ghi chú (như MC), rồi nhấn **Tìm nhạc**.
-4. Chọn ứng viên YouTube, nhấn **Nghe thử** để helper tải MP3 và dựng waveform, chỉnh điểm đầu/cuối, fade-in/fade-out (bật lên mặc định 3 giây), rồi nhấn **Đúng bản này**.
+2. Dán danh sách nhạc rồi nhấn **Phân tích danh sách**. Tên thư mục có thể không đánh số, có dấu `:`, tiêu đề Markdown (`#`, `**...**`), hoặc nhãn `Thư mục:` / `Folder:`. Bài hát có thể là dòng thường, đánh số `1.` / `1)`, hoặc gạch đầu dòng; giữ nguyên thứ tự và bài trùng.
+3. Rà soát tiêu đề mục, tên bài, query và ghi chú, rồi nhấn **Tìm nhạc**. Danh sách chỉ có các bài đánh số được gom vào một thư mục; dòng không rõ vai trò được giữ để rà soát. Query tìm kiếm và tên bài/thư mục không bị chặn theo số ký tự; tên file ZIP vẫn được chuẩn hóa cho hệ điều hành.
+4. Bấm thẻ ứng viên để nghe bằng video YouTube nhúng; có thể nhấn **Đúng bản này** ngay mà không cần tải âm thanh. Muốn cắt/fade, nhấn **Nghe thử** để mở waveform. Điểm kết thúc mặc định dùng thời lượng thật, không làm tròn tăng gây lỗi vượt nguồn; đoạn cắt sai hoặc fade vượt đoạn vẫn cần sửa.
 5. Khi mọi bài nhạc đã xác nhận, nhấn **Tải tất cả theo thư mục (ZIP)** để nhận `nhac-cuoi.zip` có thư mục `01 - ...`, `02 - ...` và các file MP3 192 kbps đã cắt/fade.
+
+Ví dụ không cần đánh số thư mục:
+
+```text
+Đón khách:
+1. Hát cho em
+2. Ba kể con nghe
+
+MC dẫn:
+Perfect (0:30–1:10) (bản gốc)
+```
+
+Cũng nhận `Đón khách 1. Hát cho em, 2. Ba kể con nghe. MC dẫn 1. Perfect.` hoặc `Đón khách: Hát cho em; Ba kể con nghe` trên cùng dòng. Dùng dấu `;` để tách bài sau dấu `:`; dấu phẩy, `&`, dấu gạch trong tên bài được giữ nguyên. Khoảng thời gian hỗ trợ `(m:ss–m:ss)`, phần lẻ giây và `h:mm:ss`; khoảng ở bài ưu tiên hơn khoảng ở mục. Chú thích được tách khỏi query, không bỏ nhầm bài có số như `Mambo No. 5` hoặc `Love 2.0`.
+
 
 ## Phát triển & API
 

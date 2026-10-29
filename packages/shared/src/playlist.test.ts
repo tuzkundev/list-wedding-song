@@ -68,6 +68,142 @@ describe('playlist review model', () => {
       { title: 'MC dẫn', tracks: ['Bài hát'] },
     ]);
   });
+  it('keeps a flat numbered list as tracks and preserves numeric song titles', () => {
+    const { playlist } = parsePlaylist([
+      '1. Mambo No. 5',
+      '2. Symphony No. 5',
+      '3. Love 2.0',
+      '4. Perfect (Piano 2.0)',
+    ].join('\n'));
+    expect(playlist?.sections).toHaveLength(1);
+    expect(playlist?.sections[0].tracks.map(track => track.title)).toEqual([
+      'Mambo No. 5',
+      'Symphony No. 5',
+      'Love 2.0',
+      'Perfect (Piano 2.0)',
+    ]);
+  });
+  it('recognizes grouped numbered section headers without grouping a flat numbered list', () => {
+    const { playlist } = parsePlaylist('1. Ceremony\nFirst dance\n2. Reception\nDinner song');
+    expect(playlist?.sections.map(section => ({
+      title: section.title,
+      tracks: section.tracks.map(track => track.title),
+    }))).toEqual([
+      { title: 'Ceremony', tracks: ['First dance'] },
+      { title: 'Reception', tracks: ['Dinner song'] },
+    ]);
+  });
+  it('recognizes unnumbered wedding headings without turning plain songs into folders', () => {
+    const { playlist } = parsePlaylist([
+      'Đón khách', 'Hát cho em, Ba kể con nghe',
+      'MC dẫn/mở đầu', 'Perfect & love',
+      'Cô dâu', 'Beautiful in white',
+      'Chú rể', 'I do',
+      'Trao nhẫn', 'Perfect',
+      'Rót rượu', 'Marry you',
+      'Kết', 'A thousand years',
+    ].join('\n'));
+    expect(playlist?.sections.map(section => section.title)).toEqual([
+      'Đón khách', 'MC dẫn/mở đầu', 'Cô dâu', 'Chú rể', 'Trao nhẫn', 'Rót rượu', 'Kết',
+    ]);
+    expect(playlist?.sections[0].tracks.map(track => track.title)).toEqual(['Hát cho em, Ba kể con nghe']);
+    expect(playlist?.sections[1].tracks[0].title).toBe('Perfect & love');
+  });
+  it('supports markdown and labeled headers with mixed track markers', () => {
+    const { playlist } = parsePlaylist([
+      '# Ceremony',
+      '\t•\u00a0Hát & yêu - acoustic',
+      '**Mục 2: Dinner**',
+      '* Perfect',
+      'Folder: Final songs',
+      'Last dance',
+      'Thư mục 3 - Photos',
+      'Photo song',
+      'Phần 4: Farewell',
+      'Last song',
+    ].join('\n'));
+    expect(playlist?.sections.map(section => section.title)).toEqual([
+      'Ceremony', 'Dinner', 'Final songs', 'Photos', 'Farewell',
+    ]);
+    expect(playlist?.sections.map(section => section.tracks.map(track => track.title))).toEqual([
+      ['Hát & yêu - acoustic'],
+      ['Perfect'],
+      ['Last dance'],
+      ['Photo song'],
+      ['Last song'],
+    ]);
+  });
+  it('recognizes an arbitrary heading immediately before a numbered track group', () => {
+    const { playlist } = parsePlaylist('Reception\n1. Love one\n2. Love two\nPlain finale');
+    expect(playlist?.sections.map(section => ({
+      title: section.title,
+      tracks: section.tracks.map(track => track.title),
+    }))).toEqual([
+      { title: 'Reception', tracks: ['Love one', 'Love two', 'Plain finale'] },
+    ]);
+  });
+  it('keeps plain songs inside a headed section when markers are mixed', () => {
+    const { playlist } = parsePlaylist('# Ceremony\nPerfect\n1. Hơn cả yêu\n• Beautiful in white');
+    expect(playlist?.sections.map(section => section.tracks.map(track => track.title))).toEqual([
+      ['Perfect', 'Hơn cả yêu', 'Beautiful in white'],
+    ]);
+  });
+  it('ignores formatting-only lines instead of creating empty sections or tracks', () => {
+    expect(parsePlaylist('***\n**\n•\n-\n\u00a0').playlist).toBeNull();
+  });
+  it('treats colon lines as headings and splits their inline songs on semicolons', () => {
+    const { playlist } = parsePlaylist('Đón khách: Hát cho em; Ba kể con nghe\nMC dẫn: Perfect');
+    expect(playlist?.sections.map(section => ({
+      title: section.title,
+      tracks: section.tracks.map(track => track.title),
+    }))).toEqual([
+      { title: 'Đón khách', tracks: ['Hát cho em', 'Ba kể con nghe'] },
+      { title: 'MC dẫn', tracks: ['Perfect'] },
+    ]);
+  });
+  it('prioritizes track ranges and keeps notes after a range', () => {
+    const { playlist, errors } = parsePlaylist([
+      '# Ceremony (0:00.5-0:02.5)',
+      '1. Song (1:02:03-1:03:04) (bản gốc)',
+      '(editorial note)',
+      '2. Mambo No. 5',
+      '3. Symphony No. 5',
+      '4. Love 2.0',
+      '5. Perfect (Piano 2.0)',
+      '6. https://example.com/5. song',
+    ].join('\n'));
+    expect(errors).toEqual([]);
+    expect(playlist?.sections[0].tracks.map(track => track.title)).toEqual([
+      'Song', 'Mambo No. 5', 'Symphony No. 5', 'Love 2.0', 'Perfect (Piano 2.0)', 'https://example.com/5. song',
+    ]);
+    expect(playlist?.sections[0].tracks[0]).toMatchObject({
+      startSeconds: 3723,
+      endSeconds: 3784,
+      note: '(bản gốc)\n(editorial note)',
+    });
+    expect(playlist?.sections[0].tracks[1]).toMatchObject({ startSeconds: 0.5, endSeconds: 2.5 });
+  });
+  it('keeps ordinary songs beneath colon headings and repeated numbered track groups', () => {
+    for (const text of [
+      'Reception:\nLove one\nLove two\nDinner:\nPerfect',
+      'Reception\n1. Love one\n2. Love two\nDinner\n1. Perfect',
+    ]) {
+      expect(parsePlaylist(text).playlist?.sections.map(section => ({
+        title: section.title, songs: section.tracks.map(track => track.title),
+      }))).toEqual([
+        { title: 'Reception', songs: ['Love one', 'Love two'] },
+        { title: 'Dinner', songs: ['Perfect'] },
+      ]);
+    }
+  });
+  it('retains orphan notes in their own section instead of attaching across folders', () => {
+    const { playlist } = parsePlaylist('# Ceremony\nPerfect\n# Dinner\n(chờ MC)\nMarry you');
+    expect(playlist?.sections[0].tracks[0].note).toBe('');
+    expect(playlist?.sections[1].tracks.map(track => ({ title: track.title, kind: track.kind }))).toEqual([
+      { title: '(chờ MC)', kind: 'note' },
+      { title: 'Marry you', kind: 'music' },
+    ]);
+  });
 });
 
 describe('query instrument boundaries', () => {

@@ -13,9 +13,16 @@ describe('API trust boundaries', () => {
     expect(AssetRequestSchema.parse({ videoId: 'abcdefghijk' })).toEqual({ videoId: 'abcdefghijk' });
     expect(AssetRequestSchema.safeParse({ videoId: 'abcdefghijk', url: 'file:///etc/passwd' }).success).toBe(false);
   });
-  it('bounds search work and rejects blank queries', () => {
+  it('rejects blank queries without imposing a character cap on song searches', () => {
     expect(SearchRequestSchema.safeParse({ query: ' ' }).success).toBe(false);
-    expect(SearchRequestSchema.safeParse({ query: 'x'.repeat(501) }).success).toBe(false);
+    const query = 'Hơn cả yêu phiên bản piano '.repeat(30).trim();
+    expect(SearchRequestSchema.parse({ query }).query).toBe(query);
+  });
+  it('accepts long song and folder titles without truncating them during export validation', () => {
+    const title = 'Nhạc lễ cưới '.repeat(100);
+    const value = request({ title });
+    value.sections[0].title = title;
+    expect(ExportRequestSchema.parse(value)).toEqual(value);
   });
   it.each([{ confirmed: false }, { endSeconds: 2 }, { fadeInSeconds: 7 }, { startSeconds: -1 }, { fadeOutSeconds: Infinity }])('rejects invalid export edits %j', overrides => {
     expect(ExportRequestSchema.safeParse(request(overrides)).success).toBe(false);

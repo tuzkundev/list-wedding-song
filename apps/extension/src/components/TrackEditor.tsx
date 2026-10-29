@@ -151,13 +151,13 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
   const id = useId(), canvasRef = useRef<HTMLCanvasElement>(null), stageRef = useRef<HTMLDivElement>(null), dragReplayTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [playhead, setPlayhead] = useState(track.startSeconds), [mode, setMode] = useState<PlaybackMode>(() => previewAudio.getMode(track.id));
   const [dragTarget, setDragTarget] = useState<'start' | 'end' | 'playhead' | null>(null);
-  const dur = asset.durationSeconds, end = track.endSeconds ?? Number(dur.toFixed(1));
+  const dur = asset.durationSeconds, end = track.endSeconds ?? dur;
   const errors = getEditErrors({ ...track, endSeconds: end }, dur), hasErrors = Object.keys(errors).length > 0;
   const startPct = Math.max(0, Math.min(100, (track.startSeconds / dur) * 100)), endPct = Math.max(0, Math.min(100, (end / dur) * 100)), playheadPct = Math.max(0, Math.min(100, (playhead / dur) * 100));
   const segmentLength = Math.max(0, end - track.startSeconds);
   const maxPeak = useMemo(() => Math.max(0.08, ...asset.peaks.map(([l, h]) => Math.max(Math.abs(l), Math.abs(h)))), [asset.peaks]);
 
-  useEffect(() => { if (track.endSeconds === null) onChange({ endSeconds: Number(dur.toFixed(1)) }); }, [dur, onChange, track.endSeconds]);
+  useEffect(() => { if (track.endSeconds === null) onChange({ endSeconds: dur }); }, [dur, onChange, track.endSeconds]);
 
   useEffect(() => {
     const sync = () => {
@@ -226,7 +226,7 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
   const timeFromClientX = (clientX: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect || !rect.width) return 0;
-    return Number((Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * dur).toFixed(1));
+    return Math.min(dur, Number((Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * dur).toFixed(1)));
   };
 
   const applyDrag = (target: 'start' | 'end' | 'playhead', sec: number, finalCommit = false) => {
@@ -234,7 +234,7 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
       const nextStart = Math.min(sec, Number(Math.max(0, end - 0.1).toFixed(1)));
       adjustTrimAndReplay(nextStart, end, finalCommit);
     } else if (target === 'end') {
-      const nextEnd = Math.max(sec, Number(Math.min(dur, track.startSeconds + 0.1).toFixed(1)));
+      const nextEnd = Math.max(sec, Math.min(dur, Number((track.startSeconds + 0.1).toFixed(1))));
       adjustTrimAndReplay(track.startSeconds, nextEnd, finalCommit);
     } else {
       setPlayhead(sec);
@@ -246,8 +246,8 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
   };
 
   const stepValue = (field: 'startSeconds' | 'endSeconds', delta: number) => {
-    const nextStart = field === 'startSeconds' ? Number(Math.max(0, Math.min(dur, track.startSeconds + delta)).toFixed(1)) : track.startSeconds;
-    const nextEnd = field === 'endSeconds' ? Number(Math.max(0, Math.min(dur, end + delta)).toFixed(1)) : end;
+    const nextStart = field === 'startSeconds' ? Math.max(0, Math.min(dur, Number((track.startSeconds + delta).toFixed(1)))) : track.startSeconds;
+    const nextEnd = field === 'endSeconds' ? Math.max(0, Math.min(dur, Number((end + delta).toFixed(1)))) : end;
     adjustTrimAndReplay(nextStart, nextEnd, true);
   };
 
@@ -260,7 +260,7 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
           <button type="button" className={`mp3cut-tool-btn ${mode === 'full' ? 'is-active' : ''}`} onClick={() => startPlayback('full')}>Nghe nguyên bài</button>
         </div>
         <div className="mp3cut-top-actions">
-          <button type="button" className="mp3cut-reset-btn" onClick={() => { previewAudio.stop(); setMode('none'); setPlayhead(0); onChange({ startSeconds: 0, endSeconds: Number(dur.toFixed(1)), fadeInSeconds: 0, fadeOutSeconds: 0, confirmed: false }); }}>↺ Đặt lại</button>
+          <button type="button" className="mp3cut-reset-btn" onClick={() => { previewAudio.stop(); setMode('none'); setPlayhead(0); onChange({ startSeconds: 0, endSeconds: dur, fadeInSeconds: 0, fadeOutSeconds: 0, confirmed: false }); }}>↺ Đặt lại</button>
         </div>
       </div>
 
