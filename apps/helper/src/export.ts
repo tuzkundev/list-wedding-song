@@ -24,12 +24,15 @@ export async function validateExportSnapshot(assetsDir: string, raw: unknown): P
   for (const section of snapshot.sections) {
     for (const track of section.tracks) {
       ++totalTracks;
-      let resolved: ResolvedAsset;
-      try { resolved = await readAsset(assetsDir, track.assetId); }
-      catch { throw new AppError(400, 'MISSING_ASSET', `Bài "${track.title}" chưa có hoặc đã mất file âm thanh. Hãy chuẩn bị lại.`); }
-      const errors = getEditErrors(track, resolved.asset.durationSeconds);
-      if (Object.keys(errors).length) throw new AppError(400, 'INVALID_EDIT', `Bài "${track.title}": ${Object.values(errors).join(' ')}`);
-      sources.set(track.assetId, resolved.audioPath);
+      const segments = track.parts?.length ? track.parts : [track];
+      for (const seg of segments) {
+        let resolved: ResolvedAsset;
+        try { resolved = await readAsset(assetsDir, seg.assetId); }
+        catch { throw new AppError(400, 'MISSING_ASSET', `Bài "${seg.title}" chưa có hoặc đã mất file âm thanh. Hãy chuẩn bị lại.`); }
+        const errors = getEditErrors(seg, resolved.asset.durationSeconds);
+        if (Object.keys(errors).length) throw new AppError(400, 'INVALID_EDIT', `Bài "${seg.title}": ${Object.values(errors).join(' ')}`);
+        sources.set(seg.assetId, resolved.audioPath);
+      }
     }
   }
   return { snapshot, sources, totalTracks };
@@ -47,7 +50,15 @@ export async function renderExportZip(exportsDir: string, snapshot: ExportReques
       for (let tIndex = 0; tIndex < section.tracks.length; ++tIndex) {
         const track = section.tracks[tIndex], filePath = join(workDir, `${completed}.mp3`);
         try {
-          await runProcess('ffmpeg', ['-v', 'error', '-y', '-i', sources.get(track.assetId)!, '-vn', '-af', buildAudioFilter(track.startSeconds, track.endSeconds, track.fadeInSeconds, track.fadeOutSeconds), '-c:a', 'libmp3lame', '-b:a', '192k', '--', filePath], { timeoutMs: 180_000 });
+          if (track.parts?.length) {
+            const inputArgs = track.parts.flatMap(p => ['-i', sources.get(p.assetId)!]);
+            const partFilters = track.parts.map((p, idx) => `[${idx}:a]${buildAudioFilter(p.startSeconds, p.endSeconds, p.fadeInSeconds, p.fadeOutSeconds)}[a${idx}]`);
+            const concatInputs = track.parts.map((_, idx) => `[a${idx}]`).join('');
+            const filterComplex = `${partFilters.join(';')};${concatInputs}concat=n=${track.parts.length}:v=0:a=1[outa]`;
+            await runProcess('ffmpeg', ['-v', 'error', '-y', ...inputArgs, '-vn', '-filter_complex', filterComplex, '-map', '[outa]', '-c:a', 'libmp3lame', '-b:a', '192k', '--', filePath], { timeoutMs: 240_000 });
+          } else {
+            await runProcess('ffmpeg', ['-v', 'error', '-y', '-i', sources.get(track.assetId)!, '-vn', '-af', buildAudioFilter(track.startSeconds, track.endSeconds, track.fadeInSeconds, track.fadeOutSeconds), '-c:a', 'libmp3lame', '-b:a', '192k', '--', filePath], { timeoutMs: 180_000 });
+          }
         } catch { throw new AppError(500, 'TRACK_EXPORT_FAILED', `Không thể xuất bài "${track.title}" trong mục "${section.title}". Chưa tạo ZIP.`); }
         rendered.push({ filePath, entryName: formatTrackEntry(folder, tIndex, section.tracks.length, track.title) });
         onTrack(++completed);

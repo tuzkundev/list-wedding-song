@@ -204,6 +204,25 @@ describe('playlist review model', () => {
       { title: 'Marry you', kind: 'music' },
     ]);
   });
+  it('parses multi-song medley lines joined by + into a single track with editable parts', () => {
+    const { playlist, errors } = parsePlaylist('Đón khách\n1. Em đồng ý (0:10-0:55) + Yes I do (0:30-1:20) + Một nhà (bản gốc)');
+    expect(errors).toEqual([]);
+    expect(playlist?.sections).toHaveLength(1);
+    expect(playlist?.sections[0].tracks).toHaveLength(1);
+    const medley = playlist!.sections[0].tracks[0];
+    expect(medley.title).toBe('Em đồng ý + Yes I do + Một nhà');
+    expect(medley.parts?.map(p => ({
+      title: p.title,
+      query: p.query,
+      startSeconds: p.startSeconds,
+      endSeconds: p.endSeconds,
+      note: p.note,
+    }))).toEqual([
+      { title: 'Em đồng ý', query: 'Em đồng ý lyrics', startSeconds: 10, endSeconds: 55, note: '' },
+      { title: 'Yes I do', query: 'Yes I do lyrics', startSeconds: 30, endSeconds: 80, note: '' },
+      { title: 'Một nhà', query: 'Một nhà lyrics', startSeconds: 0, endSeconds: null, note: '(bản gốc)' },
+    ]);
+  });
 });
 
 describe('query instrument boundaries', () => {

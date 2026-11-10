@@ -166,34 +166,45 @@ export async function renderExportZipInBrowser(
     }
     for (let tIndex = 0; tIndex < section.tracks.length; ++tIndex) {
       const track = section.tracks[tIndex];
-      const url = audioUrls[track.assetId];
-      if (!url) throw new Error(`Chưa có dữ liệu âm thanh cho bài "${track.title}".`);
-      const rawBuffer = await (await fetch(url)).arrayBuffer();
-      const decodeCtx = new AudioContext();
-      let decoded: AudioBuffer;
-      try {
-        decoded = await decodeCtx.decodeAudioData(rawBuffer.slice(0));
-      } finally {
-        void decodeCtx.close();
+      const segments = track.parts?.length ? track.parts : [track];
+      const decodedSegments: Array<{ seg: (typeof segments)[number]; buffer: AudioBuffer; duration: number }> = [];
+      for (const seg of segments) {
+        const url = audioUrls[seg.assetId];
+        if (!url) throw new Error(`Chưa có dữ liệu âm thanh cho bài "${seg.title}".`);
+        const rawBuffer = await (await fetch(url)).arrayBuffer();
+        const decodeCtx = new AudioContext();
+        let decoded: AudioBuffer;
+        try {
+          decoded = await decodeCtx.decodeAudioData(rawBuffer.slice(0));
+        } finally {
+          void decodeCtx.close();
+        }
+        const duration = Math.max(0.1, seg.endSeconds - seg.startSeconds);
+        decodedSegments.push({ seg, buffer: decoded, duration });
       }
-      const duration = Math.max(0.1, track.endSeconds - track.startSeconds);
-      const sampleRate = decoded.sampleRate;
-      const offline = new OfflineAudioContext(Math.min(2, decoded.numberOfChannels), Math.ceil(duration * sampleRate), sampleRate);
-      const source = offline.createBufferSource();
-      source.buffer = decoded;
-      const gain = offline.createGain();
-      if (track.fadeInSeconds > 0) {
-        gain.gain.setValueAtTime(0, 0);
-        gain.gain.linearRampToValueAtTime(1, track.fadeInSeconds);
-      } else {
-        gain.gain.setValueAtTime(1, 0);
+      const totalDuration = decodedSegments.reduce((sum, item) => sum + item.duration, 0);
+      const sampleRate = decodedSegments[0].buffer.sampleRate;
+      const numChannels = Math.max(1, ...decodedSegments.map(item => Math.min(2, item.buffer.numberOfChannels)));
+      const offline = new OfflineAudioContext(numChannels, Math.max(1, Math.ceil(totalDuration * sampleRate)), sampleRate);
+      let offset = 0;
+      for (const { seg, buffer, duration } of decodedSegments) {
+        const source = offline.createBufferSource();
+        source.buffer = buffer;
+        const gain = offline.createGain();
+        if (seg.fadeInSeconds > 0) {
+          gain.gain.setValueAtTime(0, offset);
+          gain.gain.linearRampToValueAtTime(1, offset + seg.fadeInSeconds);
+        } else {
+          gain.gain.setValueAtTime(1, offset);
+        }
+        if (seg.fadeOutSeconds > 0) {
+          gain.gain.setValueAtTime(1, offset + Math.max(0, duration - seg.fadeOutSeconds));
+          gain.gain.linearRampToValueAtTime(0, offset + duration);
+        }
+        source.connect(gain).connect(offline.destination);
+        source.start(offset, seg.startSeconds, duration);
+        offset += duration;
       }
-      if (track.fadeOutSeconds > 0) {
-        gain.gain.setValueAtTime(1, Math.max(0, duration - track.fadeOutSeconds));
-        gain.gain.linearRampToValueAtTime(0, duration);
-      }
-      source.connect(gain).connect(offline.destination);
-      source.start(0, track.startSeconds, duration);
       const rendered = await offline.startRendering();
       const wavBytes = encodeWavFromAudioBuffer(rendered);
       const entryName = formatTrackEntry(folder, tIndex, section.tracks.length, track.title).replace(/\.mp3$/i, '.wav');

@@ -21,10 +21,19 @@ export const JobSchema = z.object({
   result: z.union([AssetSchema, z.object({ exportId: IdSchema }).strict()]).nullable(),
   error: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
 }).strict();
+export const ExportTrackPartSchema = z.object({
+  id: IdSchema, title: z.string(), assetId: IdSchema, startSeconds: seconds, endSeconds: seconds,
+  fadeInSeconds: seconds, fadeOutSeconds: seconds, confirmed: z.literal(true),
+}).strict().superRefine((part, ctx) => {
+  if (part.endSeconds <= part.startSeconds) ctx.addIssue({ code: 'custom', path: ['endSeconds'], message: 'Điểm kết thúc phải sau điểm bắt đầu.' });
+  if (part.fadeInSeconds + part.fadeOutSeconds > part.endSeconds - part.startSeconds) ctx.addIssue({ code: 'custom', path: ['fadeOutSeconds'], message: 'Tổng fade vượt độ dài đoạn.' });
+});
 export const ExportTrackSchema = z.object({
   id: IdSchema, title: z.string(), assetId: IdSchema, startSeconds: seconds, endSeconds: seconds,
   fadeInSeconds: seconds, fadeOutSeconds: seconds, confirmed: z.literal(true),
+  parts: z.array(ExportTrackPartSchema).min(2).max(20).optional(),
 }).strict().superRefine((track, ctx) => {
+  if (track.parts?.length) return;
   if (track.endSeconds <= track.startSeconds) ctx.addIssue({ code: 'custom', path: ['endSeconds'], message: 'Điểm kết thúc phải sau điểm bắt đầu.' });
   if (track.fadeInSeconds + track.fadeOutSeconds > track.endSeconds - track.startSeconds) ctx.addIssue({ code: 'custom', path: ['fadeOutSeconds'], message: 'Tổng fade vượt độ dài đoạn.' });
 });
@@ -33,4 +42,5 @@ export type Candidate = z.infer<typeof CandidateSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type Job = z.infer<typeof JobSchema>;
 export type Health = z.infer<typeof HealthSchema>;
+export type ExportTrackPart = z.infer<typeof ExportTrackPartSchema>;
 export type ExportRequest = z.infer<typeof ExportRequestSchema>;

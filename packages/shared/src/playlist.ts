@@ -1,12 +1,19 @@
 import { z } from 'zod';
 import { CandidateSchema, IdSchema, VideoIdSchema } from './api';
 
+export const TrackPartSchema = z.object({
+  id: IdSchema, title: z.string(), query: z.string(), note: z.string(),
+  startSeconds: z.number(), endSeconds: z.number().nullable(), fadeInSeconds: z.number(), fadeOutSeconds: z.number(),
+  selectedVideoId: VideoIdSchema.nullable(), assetId: IdSchema.nullable(), confirmed: z.boolean(), candidates: z.array(CandidateSchema),
+});
 export const TrackSchema = z.object({
   id: IdSchema, title: z.string(), query: z.string(), kind: z.enum(['music', 'note']), note: z.string(),
   startSeconds: z.number(), endSeconds: z.number().nullable(), fadeInSeconds: z.number(), fadeOutSeconds: z.number(),
   selectedVideoId: VideoIdSchema.nullable(), assetId: IdSchema.nullable(), confirmed: z.boolean(), candidates: z.array(CandidateSchema),
+  parts: z.array(TrackPartSchema).optional(),
 });
 export const PlaylistSchema = z.object({ id: IdSchema, title: z.string(), sections: z.array(z.object({ id: IdSchema, title: z.string(), tracks: z.array(TrackSchema) })) });
+export type TrackPart = z.infer<typeof TrackPartSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type Playlist = z.infer<typeof PlaylistSchema>;
 export type Section = Playlist['sections'][number];
@@ -360,15 +367,86 @@ export function parsePlaylist(text: string): ParseResult {
     }
   };
 
+  const splitMedleyParts = (value: string): string[] => {
+    const segments: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < value.length; ++i) {
+      if (value[i] === '(') depth++;
+      else if (value[i] === ')') depth = Math.max(0, depth - 1);
+      else if (depth === 0 && value[i] === '+' && i > 0 && i < value.length - 1 && /\s/.test(value[i - 1]) && /\s/.test(value[i + 1])) {
+        const chunk = value.slice(start, i).trim();
+        if (chunk) segments.push(chunk);
+        start = i + 1;
+      }
+    }
+    const tail = value.slice(start).trim();
+    if (tail) segments.push(tail);
+    return segments;
+  };
+
   const pushTrack = (rawText: string, lineNo: number) => {
     const stripped = trackText(rawText);
     if (!stripped) return;
     const standaloneNote = NOTE_LINE.test(stripped);
     if (standaloneNote && previousTrack) {
       previousTrack.note = [previousTrack.note, stripped].filter(Boolean).join('\n');
+      if (previousTrack.parts?.length) {
+        const lastPart = previousTrack.parts[previousTrack.parts.length - 1];
+        lastPart.note = [lastPart.note, stripped].filter(Boolean).join('\n');
+      }
       return;
     }
     ensureDefaultSection();
+    if (!standaloneNote) {
+      const rawParts = splitMedleyParts(stripped);
+      if (rawParts.length >= 2) {
+        const parts: TrackPart[] = [];
+        for (const rawPart of rawParts) {
+          const parsedPart = readRange(rawPart, lineNo, errors);
+          const extractedPart = extractTrailingNote(parsedPart.title);
+          const partTitle = extractedPart.title || cleanTitleText(parsedPart.title);
+          if (!partTitle) continue;
+          const partRange = parsedPart.range ?? defaultRange;
+          parts.push({
+            id: crypto.randomUUID(),
+            title: partTitle,
+            query: buildSearchQuery(partTitle),
+            note: extractedPart.note,
+            startSeconds: partRange?.[0] ?? 0,
+            endSeconds: partRange?.[1] ?? null,
+            fadeInSeconds: 0,
+            fadeOutSeconds: 0,
+            selectedVideoId: null,
+            assetId: null,
+            confirmed: false,
+            candidates: [],
+          });
+        }
+        if (parts.length >= 2) {
+          const mergedTitle = parts.map(p => p.title).join(' + ');
+          const track: Track = {
+            id: crypto.randomUUID(),
+            title: mergedTitle,
+            query: parts[0].query,
+            kind: 'music',
+            note: parts.map(p => p.note).filter(Boolean).join(' · '),
+            startSeconds: parts[0].startSeconds,
+            endSeconds: parts[0].endSeconds,
+            fadeInSeconds: 0,
+            fadeOutSeconds: 0,
+            selectedVideoId: null,
+            assetId: null,
+            confirmed: false,
+            candidates: [],
+            parts,
+          };
+          section!.tracks.push(track);
+          previousTrack = track;
+          return;
+        }
+      }
+    }
     const parsed = readRange(stripped, lineNo, errors);
     const extracted = extractTrailingNote(parsed.title);
     const finalTitle = standaloneNote ? stripped : extracted.title || cleanTitleText(parsed.title);

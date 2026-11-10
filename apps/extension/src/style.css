@@ -275,10 +275,87 @@ textarea#playlist-input {
 }
 .search-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 10px;
   align-items: end;
   margin-top: 12px;
+}
+.medley-container {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed #cbd5e1;
+}
+.medley-banner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eff6ff 0%, #f0fdf4 100%);
+  border: 1px solid #bfdbfe;
+}
+.medley-banner-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.medley-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #0284c7;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.medley-summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.medley-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.medley-parts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.medley-part-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #dbe3ee;
+  background: #f8fafc;
+}
+.medley-part-card.is-confirmed {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.medley-part-header {
+  display: grid;
+  grid-template-columns: auto 1.2fr 1.5fr auto auto auto auto;
+  gap: 10px;
+  align-items: end;
+}
+.medley-part-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #00f57a;
+  font-size: 12px;
+  font-weight: 700;
 }
 .file-upload-btn {
   display: inline-flex;
