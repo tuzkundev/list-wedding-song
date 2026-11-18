@@ -12,7 +12,7 @@ class PreviewAudio {
   private activeTrackId: string | null = null;
   private activeMode: PlaybackMode = 'none';
   private isActive = false;
-  private blobUrl: string | null = null;
+  private currentSrc: string | null = null;
   private rafId: number | null = null;
   private readonly listeners = new Set<() => void>();
   startMark = 0;
@@ -55,8 +55,8 @@ class PreviewAudio {
     this.activeMode = mode;
     this.isActive = true;
     this.startMark = start;
-    if (this.blobUrl !== url) {
-      this.blobUrl = url;
+    if (this.currentSrc !== url) {
+      this.currentSrc = url;
       this.element.src = url;
     }
     this.element.currentTime = start;
@@ -112,7 +112,7 @@ class PreviewAudio {
     }
   }
 
-  stop(revoke = false): void {
+  stop(): void {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -125,11 +125,6 @@ class PreviewAudio {
     if (this.ctx && this.gain) {
       this.gain.gain.cancelScheduledValues(this.ctx.currentTime);
       this.gain.gain.setValueAtTime(1, this.ctx.currentTime);
-    }
-    if (revoke && this.blobUrl) {
-      URL.revokeObjectURL(this.blobUrl);
-      this.blobUrl = null;
-      this.element.removeAttribute('src');
     }
     this.activeTrackId = null;
     this.activeMode = 'none';

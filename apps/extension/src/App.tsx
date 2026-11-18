@@ -170,7 +170,7 @@ export default function App() {
         if (staleSearchTracks.length) await forEachConcurrent(staleSearchTracks, runTrackSearch);
       }
     })();
-    return () => { controller.abort(); previewAudio.stop(true); Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url)); };
+    return () => { controller.abort(); previewAudio.stop(); Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url)); };
   }, [runTrackSearch, verifySavedAssets]);
 
   useEffect(() => {
@@ -183,7 +183,7 @@ export default function App() {
     if ((playlist || text.trim()) && !window.confirm('Làm mới tất cả sẽ xóa danh sách hiện tại để bạn nhập danh sách mới. Tiếp tục?')) return;
     abortRef.current.abort();
     abortRef.current = new AbortController();
-    previewAudio.stop(true);
+    previewAudio.stop();
     Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url));
     clearTimeout(saveTimer.current);
     setText('');
@@ -582,7 +582,7 @@ export default function App() {
             const selected = c.videoId === item.selectedVideoId;
             return (
               <div key={c.videoId} className={`candidate-pill ${selected ? 'is-selected' : ''}`} onClick={() => {
-                previewAudio.stop(true);
+                previewAudio.stop();
                 setActiveEmbed({ ownerId, videoId: c.videoId });
                 if (c.videoId === item.selectedVideoId) return;
                 onSelectVideo(c.videoId);
@@ -677,7 +677,7 @@ export default function App() {
           <button type="button" className="primary-button" disabled={!text.trim()} onClick={() => {
             if (playlist && dirty && !window.confirm('Phân tích lại sẽ thay thế danh sách đã chỉnh sửa. Bạn có chắc muốn tiếp tục?')) return;
             abortRef.current.abort(); abortRef.current = new AbortController();
-            previewAudio.stop(true); Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url));
+            previewAudio.stop(); Object.values(audioUrlsRef.current).forEach(url => URL.revokeObjectURL(url));
             setAssets({}); setAudioUrls({}); setTrackBusy({}); setTrackErrors({}); setOpenEditors({}); setExportStatus(null); setActiveEmbed(null);
             const res = parsePlaylist(text); setParseErrors(res.errors);
             setPlaylist(res.playlist); setDirty(false);
