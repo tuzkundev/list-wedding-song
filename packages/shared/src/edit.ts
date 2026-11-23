@@ -1,6 +1,38 @@
-export interface AudioEdit { startSeconds: number; endSeconds: number | null; fadeInSeconds: number; fadeOutSeconds: number }
-export type EditErrors = Partial<Record<keyof AudioEdit | 'duration', string>>;
+/** 'keep' = chỉ giữ đoạn giữa 2 tay nắm; 'remove' = bỏ đoạn giữa 2 tay nắm, giữ phần còn lại. */
+export type CutMode = 'keep' | 'remove';
+export interface AudioEdit { startSeconds: number; endSeconds: number | null; fadeInSeconds: number; fadeOutSeconds: number; cutMode?: CutMode }
+export interface AudioSegment { startSeconds: number; endSeconds: number; fadeInSeconds: number; fadeOutSeconds: number }
+export type EditErrors = Partial<Record<Exclude<keyof AudioEdit, 'cutMode'> | 'duration', string>>;
+
+const MIN_SEGMENT_SECONDS = 0.05;
+
+/** Các đoạn âm thanh thực sự được phát/xuất, theo thứ tự thời gian. */
+export function resolveSegments(edit: AudioEdit, duration: number): AudioSegment[] {
+  const end = edit.endSeconds ?? duration;
+  if (edit.cutMode !== 'remove') {
+    return [{ startSeconds: edit.startSeconds, endSeconds: end, fadeInSeconds: edit.fadeInSeconds, fadeOutSeconds: edit.fadeOutSeconds }];
+  }
+  const ranges: Array<[number, number]> = [[0, edit.startSeconds], [end, duration]];
+  const kept = ranges.filter(([s, e]) => e - s >= MIN_SEGMENT_SECONDS);
+  return kept.map(([s, e], index) => ({
+    startSeconds: s,
+    endSeconds: e,
+    fadeInSeconds: index === 0 ? edit.fadeInSeconds : 0,
+    fadeOutSeconds: index === kept.length - 1 ? edit.fadeOutSeconds : 0,
+  }));
+}
+
+export function segmentsLength(segments: AudioSegment[]): number {
+  return segments.reduce((sum, seg) => sum + Math.max(0, seg.endSeconds - seg.startSeconds), 0);
+}
+
+export function gainAtSegments(position: number, segments: AudioSegment[]): number {
+  const seg = segments.find(s => position >= s.startSeconds && position < s.endSeconds);
+  return seg ? gainAtPosition(position, seg) : 0;
+}
+
 export function getEditErrors(edit: AudioEdit, duration: number | null): EditErrors {
+  if (edit.cutMode === 'remove') return getRemoveEditErrors(edit, duration);
   const errors: EditErrors = {};
   if (duration === null || !Number.isFinite(duration) || duration <= 0) errors.duration = 'Cần chuẩn bị âm thanh để biết thời lượng thật.';
   if (!Number.isFinite(edit.startSeconds) || edit.startSeconds < 0) errors.startSeconds = 'Bắt đầu phải là số giây không âm.';
@@ -9,6 +41,19 @@ export function getEditErrors(edit: AudioEdit, duration: number | null): EditErr
   if (!Number.isFinite(edit.fadeInSeconds) || edit.fadeInSeconds < 0) errors.fadeInSeconds = 'Fade-in phải là số giây không âm.';
   if (!Number.isFinite(edit.fadeOutSeconds) || edit.fadeOutSeconds < 0) errors.fadeOutSeconds = 'Fade-out phải là số giây không âm.';
   if (edit.endSeconds !== null && edit.fadeInSeconds + edit.fadeOutSeconds > edit.endSeconds - edit.startSeconds) errors.fadeOutSeconds = 'Tổng fade-in và fade-out không được vượt độ dài đoạn.';
+  return errors;
+}
+function getRemoveEditErrors(edit: AudioEdit, duration: number | null): EditErrors {
+  const errors = getEditErrors({ ...edit, cutMode: 'keep', fadeInSeconds: 0, fadeOutSeconds: 0 }, duration);
+  if (!Number.isFinite(edit.fadeInSeconds) || edit.fadeInSeconds < 0) errors.fadeInSeconds = 'Fade-in phải là số giây không âm.';
+  if (!Number.isFinite(edit.fadeOutSeconds) || edit.fadeOutSeconds < 0) errors.fadeOutSeconds = 'Fade-out phải là số giây không âm.';
+  if (Object.keys(errors).length || duration === null) return errors;
+  const segments = resolveSegments(edit, duration);
+  if (!segments.length) {
+    errors.endSeconds = 'Không thể bỏ toàn bộ bài. Hãy thu hẹp đoạn cần bỏ.';
+  } else if (segments.some(seg => seg.fadeInSeconds + seg.fadeOutSeconds > seg.endSeconds - seg.startSeconds)) {
+    errors.fadeOutSeconds = 'Fade-in/fade-out vượt độ dài phần nhạc còn lại.';
+  }
   return errors;
 }
 export function gainAtPosition(position: number, edit: AudioEdit): number {

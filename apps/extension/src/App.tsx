@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Asset, ExportTrackPart } from '@wedding/shared/api';
-import { formatTimestamp, getEditErrors } from '@wedding/shared/edit';
+import { formatTimestamp, getEditErrors, resolveSegments, type AudioEdit } from '@wedding/shared/edit';
 import { buildSearchQuery, cleanTitleText, extractTrailingNote, parsePlaylist, PlaylistSchema, sanitizeSearchQuery, type ParseResult, type Playlist, type Track, type TrackPart } from '@wedding/shared/playlist';
 import { exportPlaylistZip, fetchBlobUrl, forEachConcurrent, getAsset, getShareLink, prepareTrackAudio, search, uploadCustomAudioFile } from './api';
 import { previewAudio, TrackEditor } from './components/TrackEditor';
@@ -8,6 +8,13 @@ import { readStorage, writeStorage } from './storage';
 
 const STATE_KEY = 'playlistState', NOTICE_KEY = 'rightsAccepted';
 const SAMPLE_PLAYLIST = `Nhạc cưới\n1. Đón khách\n+ Hơn cả yêu\n• Em đồng ý + Yes I do + Một nhà\n2) MC mở đầu\nVideo câu chuyện tình yêu\n3. Cô dâu tiến vào lễ đường (1:07–2:10)\nA thousand years- Phiên bản cinematic orchestral\n(phần cao trào)`;
+
+/** Phát thử theo chỉnh sửa (giữ hoặc bỏ đoạn đã chọn); nếu chỉnh sửa chưa hợp lệ thì phát nguyên bài. */
+function playEdited(id: string, url: string, edit: AudioEdit, duration: number, onStop: () => void = () => undefined) {
+  const valid = Object.keys(getEditErrors(edit, duration)).length === 0;
+  const segments = valid ? resolveSegments(edit, duration) : null;
+  previewAudio.playSegments(id, url, segments, segments?.[0].startSeconds ?? 0, onStop);
+}
 
 export default function App() {
   const [copiedShare, setCopiedShare] = useState(false);
@@ -218,18 +225,14 @@ export default function App() {
         setOpenEditors(prev => ({ ...prev, [track.id]: true }));
         const nextEnd = track.endSeconds ?? asset.durationSeconds;
         updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
-        previewAudio.startMark = track.startSeconds;
-        const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-        previewAudio.play(track.id, prepared.audioUrl, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
+        playEdited(track.id, prepared.audioUrl, { ...track, endSeconds: nextEnd }, asset.durationSeconds);
         return;
       }
       setOpenEditors(prev => ({ ...prev, [track.id]: true }));
       const url = audioUrls[asset.assetId];
       const nextEnd = track.endSeconds ?? asset.durationSeconds;
       updateTrack(track.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
-      previewAudio.startMark = track.startSeconds;
-      const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-      previewAudio.play(track.id, url, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
+      playEdited(track.id, url, { ...track, endSeconds: nextEnd }, asset.durationSeconds);
     } catch (error) { setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Không chuẩn bị được âm thanh.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [track.id]: '' })); }
   };
@@ -252,18 +255,14 @@ export default function App() {
         setOpenEditors(prev => ({ ...prev, [part.id]: true }));
         const nextEnd = part.endSeconds ?? asset.durationSeconds;
         updateTrackPart(trackId, part.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
-        previewAudio.startMark = part.startSeconds;
-        const validSegment = Object.keys(getEditErrors({ ...part, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-        previewAudio.play(part.id, prepared.audioUrl, validSegment ? part.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? part.fadeInSeconds : 0, validSegment ? part.fadeOutSeconds : 0, () => undefined);
+        playEdited(part.id, prepared.audioUrl, { ...part, endSeconds: nextEnd }, asset.durationSeconds);
         return;
       }
       setOpenEditors(prev => ({ ...prev, [part.id]: true }));
       const url = audioUrls[asset.assetId];
       const nextEnd = part.endSeconds ?? asset.durationSeconds;
       updateTrackPart(trackId, part.id, { selectedVideoId: targetVideoId, assetId: asset.assetId, endSeconds: nextEnd, ...(videoChanged ? { confirmed: false } : {}) });
-      previewAudio.startMark = part.startSeconds;
-      const validSegment = Object.keys(getEditErrors({ ...part, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-      previewAudio.play(part.id, url, validSegment ? part.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? part.fadeInSeconds : 0, validSegment ? part.fadeOutSeconds : 0, () => undefined);
+      playEdited(part.id, url, { ...part, endSeconds: nextEnd }, asset.durationSeconds);
     } catch (error) { setTrackErrors(prev => ({ ...prev, [part.id]: error instanceof Error ? error.message : 'Không chuẩn bị được âm thanh.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [part.id]: '' })); }
   };
@@ -295,17 +294,7 @@ export default function App() {
       const playStep = (index: number) => {
         if (index >= chainItems.length) return;
         const { part, asset, url, end } = chainItems[index];
-        const valid = Object.keys(getEditErrors({ ...part, endSeconds: end }, asset.durationSeconds)).length === 0;
-        previewAudio.startMark = valid ? part.startSeconds : 0;
-        previewAudio.play(
-          part.id,
-          url,
-          valid ? part.startSeconds : 0,
-          valid ? end : null,
-          valid ? part.fadeInSeconds : 0,
-          valid ? part.fadeOutSeconds : 0,
-          () => playStep(index + 1),
-        );
+        playEdited(part.id, url, { ...part, endSeconds: end }, asset.durationSeconds, () => playStep(index + 1));
       };
       playStep(0);
     } catch (error) {
@@ -325,9 +314,7 @@ export default function App() {
       setOpenEditors(prev => ({ ...prev, [track.id]: true }));
       const nextEnd = track.endSeconds ?? asset.durationSeconds;
       updateTrack(track.id, { assetId: asset.assetId, endSeconds: nextEnd, confirmed: false });
-      previewAudio.startMark = track.startSeconds;
-      const validSegment = Object.keys(getEditErrors({ ...track, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-      previewAudio.play(track.id, audioUrl, validSegment ? track.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? track.fadeInSeconds : 0, validSegment ? track.fadeOutSeconds : 0, () => undefined);
+      playEdited(track.id, audioUrl, { ...track, endSeconds: nextEnd }, asset.durationSeconds);
     } catch (error) {
       setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Không đọc được file âm thanh.' }));
     } finally {
@@ -345,9 +332,7 @@ export default function App() {
       setOpenEditors(prev => ({ ...prev, [part.id]: true }));
       const nextEnd = part.endSeconds ?? asset.durationSeconds;
       updateTrackPart(trackId, part.id, { assetId: asset.assetId, endSeconds: nextEnd, confirmed: false });
-      previewAudio.startMark = part.startSeconds;
-      const validSegment = Object.keys(getEditErrors({ ...part, endSeconds: nextEnd }, asset.durationSeconds)).length === 0;
-      previewAudio.play(part.id, audioUrl, validSegment ? part.startSeconds : 0, validSegment ? nextEnd : null, validSegment ? part.fadeInSeconds : 0, validSegment ? part.fadeOutSeconds : 0, () => undefined);
+      playEdited(part.id, audioUrl, { ...part, endSeconds: nextEnd }, asset.durationSeconds);
     } catch (error) {
       setTrackErrors(prev => ({ ...prev, [part.id]: error instanceof Error ? error.message : 'Không đọc được file âm thanh.' }));
     } finally {
@@ -383,6 +368,7 @@ export default function App() {
         endSeconds: track.endSeconds,
         fadeInSeconds: track.fadeInSeconds,
         fadeOutSeconds: track.fadeOutSeconds,
+        cutMode: track.cutMode,
         selectedVideoId: track.selectedVideoId,
         assetId: track.assetId,
         confirmed: track.confirmed,
@@ -406,6 +392,7 @@ export default function App() {
         endSeconds: sole?.endSeconds ?? null,
         fadeInSeconds: sole?.fadeInSeconds ?? 0,
         fadeOutSeconds: sole?.fadeOutSeconds ?? 0,
+        cutMode: sole?.cutMode,
         selectedVideoId: sole?.selectedVideoId ?? null,
         assetId: sole?.assetId ?? null,
         confirmed: sole?.confirmed ?? false,
@@ -431,7 +418,20 @@ export default function App() {
     try {
       const resolvedAssets: Record<string, Asset> = { ...assets };
       const resolvedAudioUrls: Record<string, string> = { ...audioUrls };
-      const trackAssetMap: Record<string, { assetId: string; endSeconds: number; parts?: ExportTrackPart[] }> = {};
+      type ExportFields = { assetId: string; startSeconds: number; endSeconds: number; fadeInSeconds: number; fadeOutSeconds: number; parts?: ExportTrackPart[] };
+      const trackAssetMap: Record<string, ExportFields> = {};
+      // Chuyển chỉnh sửa (giữ/bỏ đoạn) thành các đoạn xuất thực tế của cùng một file.
+      const toExportParts = (item: { id: string; title: string }, assetId: string, edit: AudioEdit, duration: number): ExportTrackPart[] =>
+        resolveSegments(edit, duration).map((seg, index) => ({
+          id: index === 0 ? item.id : crypto.randomUUID(),
+          title: item.title,
+          assetId,
+          ...seg,
+          confirmed: true as const,
+        }));
+      const toExportFields = (parts: ExportTrackPart[]): ExportFields => parts.length === 1
+        ? { assetId: parts[0].assetId, startSeconds: parts[0].startSeconds, endSeconds: parts[0].endSeconds, fadeInSeconds: parts[0].fadeInSeconds, fadeOutSeconds: parts[0].fadeOutSeconds }
+        : { assetId: parts[0].assetId, startSeconds: parts[0].startSeconds, endSeconds: parts[0].endSeconds, fadeInSeconds: 0, fadeOutSeconds: 0, parts };
 
       const allSegmentsToPrep: Array<{ title: string; videoId: string | null; assetId: string | null }> = [];
       for (const t of musicTracks) {
@@ -473,22 +473,9 @@ export default function App() {
             if (Object.keys(errs).length > 0) {
               throw new Error(`Phần "${p.title}": ${Object.values(errs).join(' ')}`);
             }
-            exportParts.push({
-              id: p.id,
-              title: p.title,
-              assetId: asset.assetId,
-              startSeconds: p.startSeconds,
-              endSeconds,
-              fadeInSeconds: p.fadeInSeconds,
-              fadeOutSeconds: p.fadeOutSeconds,
-              confirmed: true as const,
-            });
+            exportParts.push(...toExportParts(p, asset.assetId, { ...p, endSeconds }, asset.durationSeconds));
           }
-          trackAssetMap[t.id] = {
-            assetId: exportParts[0].assetId,
-            endSeconds: exportParts[0].endSeconds,
-            parts: exportParts,
-          };
+          trackAssetMap[t.id] = toExportFields(exportParts);
         } else {
           let asset = t.assetId ? resolvedAssets[t.assetId] : undefined;
           let url = t.assetId ? resolvedAudioUrls[t.assetId] : undefined;
@@ -509,7 +496,7 @@ export default function App() {
           if (Object.keys(errs).length > 0) {
             throw new Error(`Bài "${t.title}": ${Object.values(errs).join(' ')}`);
           }
-          trackAssetMap[t.id] = { assetId: asset.assetId, endSeconds };
+          trackAssetMap[t.id] = toExportFields(toExportParts(t, asset.assetId, { ...t, endSeconds }, asset.durationSeconds));
         }
       }
 
@@ -522,10 +509,10 @@ export default function App() {
             id: t.id,
             title: t.title,
             assetId: trackAssetMap[t.id].assetId,
-            startSeconds: t.startSeconds,
+            startSeconds: trackAssetMap[t.id].startSeconds,
             endSeconds: trackAssetMap[t.id].endSeconds,
-            fadeInSeconds: t.fadeInSeconds,
-            fadeOutSeconds: t.fadeOutSeconds,
+            fadeInSeconds: trackAssetMap[t.id].fadeInSeconds,
+            fadeOutSeconds: trackAssetMap[t.id].fadeOutSeconds,
             confirmed: true as const,
             ...(trackAssetMap[t.id].parts ? { parts: trackAssetMap[t.id].parts } : {}),
           })),

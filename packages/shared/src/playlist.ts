@@ -4,11 +4,13 @@ import { CandidateSchema, IdSchema, VideoIdSchema } from './api';
 export const TrackPartSchema = z.object({
   id: IdSchema, title: z.string(), query: z.string(), note: z.string(),
   startSeconds: z.number(), endSeconds: z.number().nullable(), fadeInSeconds: z.number(), fadeOutSeconds: z.number(),
+  cutMode: z.enum(['keep', 'remove']).optional(),
   selectedVideoId: VideoIdSchema.nullable(), assetId: IdSchema.nullable(), confirmed: z.boolean(), candidates: z.array(CandidateSchema),
 });
 export const TrackSchema = z.object({
   id: IdSchema, title: z.string(), query: z.string(), kind: z.enum(['music', 'note']), note: z.string(),
   startSeconds: z.number(), endSeconds: z.number().nullable(), fadeInSeconds: z.number(), fadeOutSeconds: z.number(),
+  cutMode: z.enum(['keep', 'remove']).optional(),
   selectedVideoId: VideoIdSchema.nullable(), assetId: IdSchema.nullable(), confirmed: z.boolean(), candidates: z.array(CandidateSchema),
   parts: z.array(TrackPartSchema).optional(),
 });

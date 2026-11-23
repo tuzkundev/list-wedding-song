@@ -624,6 +624,40 @@ textarea#playlist-input {
   font-size: 13px;
   font-weight: 700;
 }
+.mp3cut-cutmode {
+  display: inline-flex;
+  gap: 2px;
+  background: #07254d;
+  border-radius: 6px;
+  padding: 2px;
+}
+.mp3cut-cutmode-btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #93c5fd;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mp3cut-cutmode-btn:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+.mp3cut-cutmode-btn.is-active {
+  background: #0c356a;
+  color: #ffffff;
+}
+.mp3cut-cutmode-btn.is-remove.is-active {
+  background: #7a1530;
+  color: #ffe4ea;
+}
+.mp3cut-wavebox.is-remove-mode .mp3cut-segment-watermark,
+.mp3cut-removed-len {
+  color: #ff8fa6;
+}
 .mp3cut-tool-btn {
   min-height: 32px;
   padding: 5px 12px;
