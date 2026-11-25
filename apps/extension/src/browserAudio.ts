@@ -28,42 +28,37 @@ export async function analyzeAudioBufferInBrowser(arrayBuffer: ArrayBuffer): Pro
   }
 }
 
-function encodeWavFromAudioBuffer(buffer: AudioBuffer): Uint8Array {
-  const numChannels = Math.min(2, buffer.numberOfChannels);
-  const sampleRate = buffer.sampleRate;
-  const numFrames = buffer.length;
-  const bytesPerSample = 2;
-  const blockAlign = numChannels * bytesPerSample;
-  const dataSize = numFrames * blockAlign;
-  const out = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(out);
-  const writeAscii = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; ++i) view.setUint8(offset + i, str.charCodeAt(i));
-  };
-  writeAscii(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeAscii(8, 'WAVE');
-  writeAscii(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeAscii(36, 'data');
-  view.setUint32(40, dataSize, true);
+const MP3_KBPS = 192;
+const MP3_FRAME = 1152;
 
-  const channels = Array.from({ length: numChannels }, (_, ch) => buffer.getChannelData(ch));
-  let offset = 44;
-  for (let i = 0; i < numFrames; ++i) {
-    for (let ch = 0; ch < numChannels; ++ch) {
-      const sample = Math.max(-1, Math.min(1, channels[ch][i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
-    }
+function toInt16(samples: Float32Array): Int16Array {
+  const out = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; ++i) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    out[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
   }
-  return new Uint8Array(out);
+  return out;
+}
+
+/** Mã hoá AudioBuffer thành MP3 192 kbps (tối đa 2 kênh), nhường luồng chính định kỳ để giao diện không đứng. */
+async function encodeMp3FromAudioBuffer(buffer: AudioBuffer): Promise<Uint8Array> {
+  const numChannels = Math.min(2, buffer.numberOfChannels);
+  const { Mp3Encoder } = await import('@breezystack/lamejs');
+  const encoder = new Mp3Encoder(numChannels, buffer.sampleRate, MP3_KBPS);
+  const left = toInt16(buffer.getChannelData(0));
+  const right = numChannels > 1 ? toInt16(buffer.getChannelData(1)) : undefined;
+  const chunks: Uint8Array[] = [];
+  for (let i = 0, frames = 0; i < left.length; i += MP3_FRAME, ++frames) {
+    const chunk = encoder.encodeBuffer(left.subarray(i, i + MP3_FRAME), right?.subarray(i, i + MP3_FRAME));
+    if (chunk.length) chunks.push(chunk.slice());
+    if (frames % 400 === 399) await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  const tail = encoder.flush();
+  if (tail.length) chunks.push(tail.slice());
+  const out = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; }
+  return out;
 }
 
 const CRC_TABLE = (() => {
@@ -167,7 +162,7 @@ export async function renderExportZipInBrowser(
     for (let tIndex = 0; tIndex < section.tracks.length; ++tIndex) {
       const track = section.tracks[tIndex];
       const segments = track.parts?.length ? track.parts : [track];
-      const decodedSegments: Array<{ seg: (typeof segments)[number]; buffer: AudioBuffer; duration: number }> = [];
+      const decodedSegments: Array<{ seg: (typeof segments)[number]; buffer: AudioBuffer; duration: number; gapBefore: number }> = [];
       for (const seg of segments) {
         const url = audioUrls[seg.assetId];
         if (!url) throw new Error(`Chưa có dữ liệu âm thanh cho bài "${seg.title}".`);
@@ -180,14 +175,16 @@ export async function renderExportZipInBrowser(
           void decodeCtx.close();
         }
         const duration = Math.max(0.1, seg.endSeconds - seg.startSeconds);
-        decodedSegments.push({ seg, buffer: decoded, duration });
+        const gapBefore = 'gapBeforeSeconds' in seg ? seg.gapBeforeSeconds ?? 0 : 0;
+        decodedSegments.push({ seg, buffer: decoded, duration, gapBefore });
       }
-      const totalDuration = decodedSegments.reduce((sum, item) => sum + item.duration, 0);
+      const totalDuration = decodedSegments.reduce((sum, item) => sum + item.duration + item.gapBefore, 0);
       const sampleRate = decodedSegments[0].buffer.sampleRate;
       const numChannels = Math.max(1, ...decodedSegments.map(item => Math.min(2, item.buffer.numberOfChannels)));
       const offline = new OfflineAudioContext(numChannels, Math.max(1, Math.ceil(totalDuration * sampleRate)), sampleRate);
       let offset = 0;
-      for (const { seg, buffer, duration } of decodedSegments) {
+      for (const { seg, buffer, duration, gapBefore } of decodedSegments) {
+        offset += gapBefore;
         const source = offline.createBufferSource();
         source.buffer = buffer;
         const gain = offline.createGain();
@@ -206,9 +203,8 @@ export async function renderExportZipInBrowser(
         offset += duration;
       }
       const rendered = await offline.startRendering();
-      const wavBytes = encodeWavFromAudioBuffer(rendered);
-      const entryName = formatTrackEntry(folder, tIndex, section.tracks.length, track.title).replace(/\.mp3$/i, '.wav');
-      entries.push({ name: entryName, data: wavBytes });
+      const mp3Bytes = await encodeMp3FromAudioBuffer(rendered);
+      entries.push({ name: formatTrackEntry(folder, tIndex, section.tracks.length, track.title), data: mp3Bytes });
       onTrack(++completed, totalTracks);
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchQuery, parsePlaylist, sanitizeSearchQuery } from './playlist';
+import { buildSearchQuery, extractYouTubeVideoId, parsePlaylist, sanitizeSearchQuery, stripYouTubeLink } from './playlist';
 
 const fixture = `Nhạc cưới\n1. Đón khách\n+ Hơn cả yêu\n• Perfect violin & piano instrumental\n- Perfect lyrics\nUntil I Found You Acoustic\nBeautiful in white\nNgày đầu tiên\nÁnh nắng của anh\nCầu hôn\n2) MC mở đầu\nVideo câu chuyện tình yêu\n3. Cô dâu (1:07–2:10)\nA thousand years- Phiên bản cinematic orchestral\n(phần cao trào)\n4. Chú rể (0:48-1:35)\nPerfect\n5. Trao nhẫn (1:00–1:50)\nI do\n6. Rót rượu (0:52–1:35)\nMarry you\n7. Kết (0:50–1:35)\nA thousand years`;
 
@@ -234,4 +234,26 @@ describe('query instrument boundaries', () => {
     ['* Hơn cả yêu *', 'Hơn cả yêu lyrics'], ['Beautiful in white *** @#$%', 'Beautiful in white lyrics'],
     ['* Marry you (bản gốc có lời)', 'Marry you lyrics'], ['Marry you - bản gốc có lời', 'Marry you lyrics'], ['', ''],
   ])('%s → %s', (title, expected) => expect(buildSearchQuery(title)).toBe(expected));
+});
+
+describe('YouTube links instead of song names', () => {
+  it('extracts video ids from common link formats', () => {
+    for (const link of ['https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s', 'https://youtu.be/dQw4w9WgXcQ?si=abc', 'youtube.com/shorts/dQw4w9WgXcQ', 'https://music.youtube.com/watch?list=x&v=dQw4w9WgXcQ']) {
+      expect(extractYouTubeVideoId(link)).toBe('dQw4w9WgXcQ');
+    }
+    expect(sanitizeSearchQuery('https://youtu.be/dQw4w9WgXcQ?si=abc')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(buildSearchQuery('Perfect')).toBe('Perfect lyrics');
+    expect(stripYouTubeLink('Perfect - https://youtu.be/dQw4w9WgXcQ')).toBe('Perfect');
+  });
+
+  it('pre-selects the linked video for tracks and medley parts', () => {
+    const { playlist, errors } = parsePlaylist('Đón khách\n1. https://youtu.be/dQw4w9WgXcQ\n2. Perfect: https://www.youtube.com/watch?v=abcdefghijk\n3. https://youtu.be/dQw4w9WgXcQ + Một nhà');
+    expect(errors).toEqual([]);
+    const [link, named, medley] = playlist!.sections[0].tracks;
+    expect(link).toMatchObject({ title: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', query: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', selectedVideoId: 'dQw4w9WgXcQ', kind: 'music' });
+    expect(link.candidates).toHaveLength(1);
+    expect(named).toMatchObject({ title: 'Perfect', selectedVideoId: 'abcdefghijk' });
+    expect(medley.parts?.[0]).toMatchObject({ selectedVideoId: 'dQw4w9WgXcQ' });
+    expect(medley.parts?.[1]).toMatchObject({ title: 'Một nhà', selectedVideoId: null });
+  });
 });

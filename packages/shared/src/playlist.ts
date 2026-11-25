@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CandidateSchema, IdSchema, VideoIdSchema } from './api';
+import { CandidateSchema, IdSchema, VideoIdSchema, type Candidate } from './api';
 
 export const TrackPartSchema = z.object({
   id: IdSchema, title: z.string(), query: z.string(), note: z.string(),
@@ -12,6 +12,8 @@ export const TrackSchema = z.object({
   startSeconds: z.number(), endSeconds: z.number().nullable(), fadeInSeconds: z.number(), fadeOutSeconds: z.number(),
   cutMode: z.enum(['keep', 'remove']).optional(),
   selectedVideoId: VideoIdSchema.nullable(), assetId: IdSchema.nullable(), confirmed: z.boolean(), candidates: z.array(CandidateSchema),
+  gapEnabled: z.boolean().optional(),
+  gapSeconds: z.number().finite().nonnegative().optional(),
   parts: z.array(TrackPartSchema).optional(),
 });
 export const PlaylistSchema = z.object({ id: IdSchema, title: z.string(), sections: z.array(z.object({ id: IdSchema, title: z.string(), tracks: z.array(TrackSchema) })) });
@@ -76,11 +78,46 @@ function stripEditorialNotes(value: string): string {
   return result.replace(/^[\s&-]+|[\s&-]+$/gu, '').replace(/\s+/g, ' ').trim();
 }
 
+const YOUTUBE_URL = /(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|shorts\/|embed\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])[^\s()]*/i;
+
+/** Lấy videoId từ link YouTube nằm bất kỳ đâu trong chuỗi. */
+export function extractYouTubeVideoId(text: string): string | null {
+  return YOUTUBE_URL.exec(text)?.[1] ?? null;
+}
+
+export function youtubeWatchUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+/** Bỏ link YouTube khỏi chuỗi (dùng để giữ phần tên bài người dùng tự gõ kèm link). */
+export function stripYouTubeLink(text: string): string {
+  return cleanTitleText(text.replace(new RegExp(YOUTUBE_URL.source, 'gi'), ' ').replace(/[\s:：|–—-]+$/u, ''));
+}
+
+/** Ứng viên tạm cho link YouTube (tên video sẽ được lấy khi tra cứu). */
+export function youtubeLinkCandidate(videoId: string): Candidate {
+  return { videoId, title: null, channel: null, durationSeconds: null, thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, webpageUrl: youtubeWatchUrl(videoId) };
+}
+
+/** Nếu dòng là link YouTube: chọn sẵn video đó, query = link chuẩn, tên = phần chữ còn lại (hoặc link). */
+function linkFields(title: string): { title: string; fields: Partial<TrackPart> } {
+  const videoId = extractYouTubeVideoId(title);
+  if (!videoId) return { title, fields: {} };
+  return {
+    title: stripYouTubeLink(title) || youtubeWatchUrl(videoId),
+    fields: { query: youtubeWatchUrl(videoId), selectedVideoId: videoId, candidates: [youtubeLinkCandidate(videoId)] },
+  };
+}
+
 export function sanitizeSearchQuery(rawQuery: string): string {
+  const videoId = extractYouTubeVideoId(rawQuery);
+  if (videoId) return youtubeWatchUrl(videoId);
   return stripEditorialNotes(rawQuery);
 }
 
 export function buildSearchQuery(title: string): string {
+  const videoId = extractYouTubeVideoId(title);
+  if (videoId) return youtubeWatchUrl(videoId);
   const clean = stripEditorialNotes(title);
   return !clean || instrumental.test(fold(clean)) ? clean : `${clean} lyrics`;
 }
@@ -407,8 +444,10 @@ export function parsePlaylist(text: string): ParseResult {
         for (const rawPart of rawParts) {
           const parsedPart = readRange(rawPart, lineNo, errors);
           const extractedPart = extractTrailingNote(parsedPart.title);
-          const partTitle = extractedPart.title || cleanTitleText(parsedPart.title);
-          if (!partTitle) continue;
+          const rawPartTitle = extractedPart.title || cleanTitleText(parsedPart.title);
+          if (!rawPartTitle) continue;
+          const partLink = linkFields(rawPartTitle);
+          const partTitle = partLink.title;
           const partRange = parsedPart.range ?? defaultRange;
           parts.push({
             id: crypto.randomUUID(),
@@ -423,6 +462,7 @@ export function parsePlaylist(text: string): ParseResult {
             assetId: null,
             confirmed: false,
             candidates: [],
+            ...partLink.fields,
           });
         }
         if (parts.length >= 2) {
@@ -451,8 +491,10 @@ export function parsePlaylist(text: string): ParseResult {
     }
     const parsed = readRange(stripped, lineNo, errors);
     const extracted = extractTrailingNote(parsed.title);
-    const finalTitle = standaloneNote ? stripped : extracted.title || cleanTitleText(parsed.title);
-    if (!finalTitle) return;
+    const rawTitle = standaloneNote ? stripped : extracted.title || cleanTitleText(parsed.title);
+    if (!rawTitle) return;
+    const link = standaloneNote ? { title: rawTitle, fields: {} } : linkFields(rawTitle);
+    const finalTitle = link.title;
     const range = parsed.range ?? defaultRange;
     const track: Track = {
       id: crypto.randomUUID(),
@@ -468,6 +510,7 @@ export function parsePlaylist(text: string): ParseResult {
       assetId: null,
       confirmed: false,
       candidates: [],
+      ...link.fields,
     };
     section!.tracks.push(track);
     previousTrack = track;

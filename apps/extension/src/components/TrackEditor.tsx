@@ -20,7 +20,15 @@ class PreviewAudio {
   private readonly listeners = new Set<() => void>();
   startMark = 0;
 
+  private gapTimer?: ReturnType<typeof setTimeout>;
+
+  afterGap(seconds: number, next: () => void): void {
+    if (seconds > 0) this.gapTimer = setTimeout(next, seconds * 1000);
+    else next();
+  }
+
   unlock(): void {
+    clearTimeout(this.gapTimer);
     if (!this.ctx) {
       this.ctx = new AudioContext();
       const source = this.ctx.createMediaElementSource(this.element);
@@ -164,6 +172,7 @@ class PreviewAudio {
   }
 
   stop(): void {
+    clearTimeout(this.gapTimer);
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -417,14 +426,14 @@ export function TrackEditor({ track, asset, audioUrl, onChange, onConfirm }: { t
           )}
 
           <div className="mp3cut-fade-capsule" role="group" aria-label="Tùy chỉnh Fade-in và Fade-out">
-            <label htmlFor={`${id}-fi`} className={`mp3cut-fade-item ${track.fadeInSeconds > 0 ? 'is-enabled' : ''}`} title={isRemove ? 'Bật/tắt làm mượt đầu bài sau khi cắt (mặc định 3s)' : 'Bật/tắt làm mượt đầu đoạn (mặc định 3s)'}>
+            <label htmlFor={`${id}-fi`} className={`mp3cut-fade-item ${track.fadeInSeconds > 0 ? 'is-enabled' : ''}`} title={isRemove ? 'Tăng dần âm lượng ngay sau đoạn bị bỏ (mặc định 3s)' : 'Bật/tắt làm mượt đầu đoạn (mặc định 3s)'}>
               <input id={`${id}-fi`} type="checkbox" checked={track.fadeInSeconds > 0} onChange={e => onChange({ fadeInSeconds: e.target.checked ? 3 : 0, confirmed: false })} />
               <span className="mp3cut-fade-icon" aria-hidden="true">╭─</span>
               <span className="mp3cut-fade-label">Fade-in</span>
               <input aria-label="Số giây fade-in" className="mp3cut-sec-input" type="number" step="0.1" min="0" disabled={track.fadeInSeconds === 0} value={track.fadeInSeconds} onChange={e => onChange({ fadeInSeconds: Number(e.target.value), confirmed: false })} />
               <span className="mp3cut-unit">s</span>
             </label>
-            <label htmlFor={`${id}-fo`} className={`mp3cut-fade-item ${track.fadeOutSeconds > 0 ? 'is-enabled' : ''}`} title={isRemove ? 'Bật/tắt làm mượt cuối bài sau khi cắt (mặc định 3s)' : 'Bật/tắt làm mượt cuối đoạn (mặc định 3s)'}>
+            <label htmlFor={`${id}-fo`} className={`mp3cut-fade-item ${track.fadeOutSeconds > 0 ? 'is-enabled' : ''}`} title={isRemove ? 'Giảm dần âm lượng ngay trước đoạn bị bỏ (mặc định 3s)' : 'Bật/tắt làm mượt cuối đoạn (mặc định 3s)'}>
               <input id={`${id}-fo`} type="checkbox" checked={track.fadeOutSeconds > 0} onChange={e => onChange({ fadeOutSeconds: e.target.checked ? 3 : 0, confirmed: false })} />
               <span className="mp3cut-fade-icon" aria-hidden="true">─╮</span>
               <span className="mp3cut-fade-label">Fade-out</span>

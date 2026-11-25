@@ -27,18 +27,20 @@ describe('cutMode remove', () => {
   const remove = { startSeconds: 10, endSeconds: 20, fadeInSeconds: 1, fadeOutSeconds: 2, cutMode: 'remove' as const };
   it('keeps audio before and after the selected range', () => {
     expect(resolveSegments(remove, 60)).toEqual([
-      { startSeconds: 0, endSeconds: 10, fadeInSeconds: 1, fadeOutSeconds: 0 },
-      { startSeconds: 20, endSeconds: 60, fadeInSeconds: 0, fadeOutSeconds: 2 },
+      { startSeconds: 0, endSeconds: 10, fadeInSeconds: 0, fadeOutSeconds: 2 },
+      { startSeconds: 20, endSeconds: 60, fadeInSeconds: 1, fadeOutSeconds: 0 },
     ]);
     expect(segmentsLength(resolveSegments(remove, 60))).toBe(50);
     expect(getEditErrors(remove, 60)).toEqual({});
   });
   it('drops empty edges', () => {
-    expect(resolveSegments({ ...remove, startSeconds: 0 }, 60)).toEqual([{ startSeconds: 20, endSeconds: 60, fadeInSeconds: 1, fadeOutSeconds: 2 }]);
-    expect(resolveSegments({ ...remove, endSeconds: 60 }, 60)).toEqual([{ startSeconds: 0, endSeconds: 10, fadeInSeconds: 1, fadeOutSeconds: 2 }]);
+    expect(resolveSegments({ ...remove, startSeconds: 0 }, 60)).toEqual([{ startSeconds: 20, endSeconds: 60, fadeInSeconds: 1, fadeOutSeconds: 0 }]);
+    expect(resolveSegments({ ...remove, endSeconds: 60 }, 60)).toEqual([{ startSeconds: 0, endSeconds: 10, fadeInSeconds: 0, fadeOutSeconds: 2 }]);
   });
   it('rejects removing the whole song or oversized fades', () => {
     expect(getEditErrors({ ...remove, startSeconds: 0, endSeconds: 60 }, 60).endSeconds).toBeDefined();
-    expect(getEditErrors({ ...remove, fadeInSeconds: 11 }, 60).fadeOutSeconds).toBeDefined();
+    expect(getEditErrors({ ...remove, fadeOutSeconds: 11 }, 60).fadeOutSeconds).toBeDefined();
+    expect(getEditErrors({ ...remove, fadeInSeconds: 41 }, 60).fadeInSeconds).toBeDefined();
+    expect(getEditErrors({ ...remove, fadeInSeconds: 11 }, 60)).toEqual({});
   });
 });

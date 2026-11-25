@@ -52,7 +52,11 @@ export async function renderExportZip(exportsDir: string, snapshot: ExportReques
         try {
           if (track.parts?.length) {
             const inputArgs = track.parts.flatMap(p => ['-i', sources.get(p.assetId)!]);
-            const partFilters = track.parts.map((p, idx) => `[${idx}:a]${buildAudioFilter(p.startSeconds, p.endSeconds, p.fadeInSeconds, p.fadeOutSeconds)}[a${idx}]`);
+            const partFilters = track.parts.map((p, idx) => {
+              const trim = buildAudioFilter(p.startSeconds, p.endSeconds, p.fadeInSeconds, p.fadeOutSeconds);
+              const gap = p.gapBeforeSeconds ? `,adelay=${Math.round(p.gapBeforeSeconds * 1000)}:all=1` : '';
+              return `[${idx}:a]${trim}${gap}[a${idx}]`;
+            });
             const concatInputs = track.parts.map((_, idx) => `[a${idx}]`).join('');
             const filterComplex = `${partFilters.join(';')};${concatInputs}concat=n=${track.parts.length}:v=0:a=1[outa]`;
             await runProcess('ffmpeg', ['-v', 'error', '-y', ...inputArgs, '-vn', '-filter_complex', filterComplex, '-map', '[outa]', '-c:a', 'libmp3lame', '-b:a', '192k', '--', filePath], { timeoutMs: 240_000 });

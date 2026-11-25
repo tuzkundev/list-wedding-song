@@ -12,14 +12,10 @@ export function resolveSegments(edit: AudioEdit, duration: number): AudioSegment
   if (edit.cutMode !== 'remove') {
     return [{ startSeconds: edit.startSeconds, endSeconds: end, fadeInSeconds: edit.fadeInSeconds, fadeOutSeconds: edit.fadeOutSeconds }];
   }
-  const ranges: Array<[number, number]> = [[0, edit.startSeconds], [end, duration]];
-  const kept = ranges.filter(([s, e]) => e - s >= MIN_SEGMENT_SECONDS);
-  return kept.map(([s, e], index) => ({
-    startSeconds: s,
-    endSeconds: e,
-    fadeInSeconds: index === 0 ? edit.fadeInSeconds : 0,
-    fadeOutSeconds: index === kept.length - 1 ? edit.fadeOutSeconds : 0,
-  }));
+  return [
+    { startSeconds: 0, endSeconds: edit.startSeconds, fadeInSeconds: 0, fadeOutSeconds: edit.fadeOutSeconds },
+    { startSeconds: end, endSeconds: duration, fadeInSeconds: edit.fadeInSeconds, fadeOutSeconds: 0 },
+  ].filter(seg => seg.endSeconds - seg.startSeconds >= MIN_SEGMENT_SECONDS);
 }
 
 export function segmentsLength(segments: AudioSegment[]): number {
@@ -51,8 +47,11 @@ function getRemoveEditErrors(edit: AudioEdit, duration: number | null): EditErro
   const segments = resolveSegments(edit, duration);
   if (!segments.length) {
     errors.endSeconds = 'Không thể bỏ toàn bộ bài. Hãy thu hẹp đoạn cần bỏ.';
-  } else if (segments.some(seg => seg.fadeInSeconds + seg.fadeOutSeconds > seg.endSeconds - seg.startSeconds)) {
-    errors.fadeOutSeconds = 'Fade-in/fade-out vượt độ dài phần nhạc còn lại.';
+  }
+  for (const seg of segments) {
+    const length = seg.endSeconds - seg.startSeconds;
+    if (seg.fadeInSeconds > length) errors.fadeInSeconds = 'Fade-in vượt độ dài phần nhạc sau đoạn bị bỏ.';
+    if (seg.fadeOutSeconds > length) errors.fadeOutSeconds = 'Fade-out vượt độ dài phần nhạc trước đoạn bị bỏ.';
   }
   return errors;
 }

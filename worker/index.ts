@@ -1,5 +1,5 @@
 import { AssetRequestSchema, AssetSchema, HealthSchema, IdSchema, SearchRequestSchema, SearchResponseSchema, VideoIdSchema, type Candidate } from '../packages/shared/src/api';
-import { sanitizeSearchQuery } from '../packages/shared/src/playlist';
+import { extractYouTubeVideoId, sanitizeSearchQuery, youtubeLinkCandidate } from '../packages/shared/src/playlist';
 
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
@@ -98,6 +98,21 @@ function collectVideoRenderers(node: unknown, out: Record<string, unknown>[]): v
     return;
   }
   for (const val of Object.values(obj)) collectVideoRenderers(val, out);
+}
+
+/** Tra cứu thông tin một video từ link (oEmbed); nếu lỗi vẫn trả về ứng viên tối thiểu. */
+async function lookupYouTubeVideo(videoId: string): Promise<Candidate> {
+  const candidate = youtubeLinkCandidate(videoId);
+  const response = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(candidate.webpageUrl)}`).catch(() => null);
+  if (!response?.ok) return candidate;
+  const data = (await response.json().catch(() => null)) as { title?: unknown; author_name?: unknown; thumbnail_url?: unknown } | null;
+  const thumb = typeof data?.thumbnail_url === 'string' && data.thumbnail_url.startsWith('https://') ? data.thumbnail_url : candidate.thumbnailUrl;
+  return {
+    ...candidate,
+    title: typeof data?.title === 'string' ? data.title : null,
+    channel: typeof data?.author_name === 'string' ? data.author_name : null,
+    thumbnailUrl: thumb,
+  };
 }
 
 async function searchYouTubeInnerTube(query: string): Promise<Candidate[]> {
@@ -237,6 +252,8 @@ export default {
     if (url.pathname === '/api/search' && request.method === 'POST') {
       const parsed = SearchRequestSchema.safeParse(await request.json().catch(() => null));
       if (!parsed.success) return errorResponse(request, 400, 'INVALID_INPUT', 'Query tìm kiếm không hợp lệ.');
+      const linkedVideoId = extractYouTubeVideoId(parsed.data.query);
+      if (linkedVideoId) return jsonResponse(request, SearchResponseSchema.parse({ candidates: [await lookupYouTubeVideo(linkedVideoId)] }));
       const cleanQuery = sanitizeSearchQuery(parsed.data.query) || parsed.data.query;
       const cached = await env.wedding_music_db
         .prepare('SELECT candidates_json, updated_at FROM search_cache WHERE query = ?')

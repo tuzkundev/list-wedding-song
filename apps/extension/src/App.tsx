@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Asset, ExportTrackPart } from '@wedding/shared/api';
 import { formatTimestamp, getEditErrors, resolveSegments, type AudioEdit } from '@wedding/shared/edit';
-import { buildSearchQuery, cleanTitleText, extractTrailingNote, parsePlaylist, PlaylistSchema, sanitizeSearchQuery, type ParseResult, type Playlist, type Track, type TrackPart } from '@wedding/shared/playlist';
+import { buildSearchQuery, cleanTitleText, extractTrailingNote, extractYouTubeVideoId, parsePlaylist, stripYouTubeLink, youtubeLinkCandidate, PlaylistSchema, sanitizeSearchQuery, type ParseResult, type Playlist, type Track, type TrackPart } from '@wedding/shared/playlist';
 import { exportPlaylistZip, fetchBlobUrl, forEachConcurrent, getAsset, getShareLink, prepareTrackAudio, search, uploadCustomAudioFile } from './api';
 import { previewAudio, TrackEditor } from './components/TrackEditor';
 import { readStorage, writeStorage } from './storage';
@@ -16,7 +16,33 @@ function playEdited(id: string, url: string, edit: AudioEdit, duration: number, 
   previewAudio.playSegments(id, url, segments, segments?.[0].startSeconds ?? 0, onStop);
 }
 
+/** Khi tên bài chỉ là link YouTube, dùng tên video thay thế sau khi tra cứu. */
+function titleFromLookup(title: string, candidateTitle: string | null | undefined): string | undefined {
+  return candidateTitle && extractYouTubeVideoId(title) && !stripYouTubeLink(title) ? candidateTitle : undefined;
+}
+
+/** Nhập link YouTube vào ô tên: chọn sẵn video đó để nghe thử ngay. */
+function linkPatch(value: string, current: Track | TrackPart): Partial<TrackPart> {
+  const videoId = extractYouTubeVideoId(value);
+  if (!videoId || videoId === current.selectedVideoId) return {};
+  return { selectedVideoId: videoId, assetId: null, candidates: [youtubeLinkCandidate(videoId)] };
+}
+
+function medleyGap(track: Track): number {
+  return track.gapEnabled ? track.gapSeconds ?? 3 : 0;
+}
+
+function newSong(title: string): TrackPart {
+  return {
+    id: crypto.randomUUID(), title, query: buildSearchQuery(title), note: '',
+    startSeconds: 0, endSeconds: null, fadeInSeconds: 0, fadeOutSeconds: 0,
+    selectedVideoId: null, assetId: null, confirmed: false, candidates: [],
+  };
+}
+
 export default function App() {
+  const [readyToAdd, setReadyToAdd] = useState(false);
+  const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
   const [copiedShare, setCopiedShare] = useState(false);
   const [text, setText] = useState(''), [parseErrors, setParseErrors] = useState<ParseResult['errors']>([]), [playlist, setPlaylist] = useState<Playlist | null>(null), [dirty, setDirty] = useState(false);
   const [assets, setAssets] = useState<Record<string, Asset>>({}), [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
@@ -78,12 +104,13 @@ export default function App() {
     });
   }, []);
 
-  const mutatePlaylist = (updater: (current: Playlist) => Playlist, flush = false) => {
+  const mutatePlaylist = (updater: (current: Playlist) => Playlist, flush = false, initial?: Playlist) => {
     setDirty(true);
     if (exportSnapshotRef.current) setExportStatus(prev => prev && ({ ...prev, snapshotChanged: true }));
     setPlaylist(current => {
-      if (!current) return null;
-      const next = updater(current);
+      const base = current ?? initial;
+      if (!base) return null;
+      const next = updater(base);
       if (flush) { clearTimeout(saveTimer.current); void writeStorage(STATE_KEY, { text, playlist: next }); }
       return next;
     });
@@ -120,7 +147,8 @@ export default function App() {
       const response = await search(cleanQuery, abortRef.current.signal);
       if (!response.candidates.length) { setTrackErrors(prev => ({ ...prev, [part.id]: 'Không tìm thấy kết quả phù hợp. Hãy sửa query rồi thử lại.' })); return; }
       const keep = response.candidates.some(c => c.videoId === part.selectedVideoId);
-      updateTrackPart(trackId, part.id, { query: cleanQuery, candidates: response.candidates, selectedVideoId: keep ? part.selectedVideoId : response.candidates[0].videoId, assetId: keep ? part.assetId : null, confirmed: false });
+      const partTitle = titleFromLookup(part.title, response.candidates[0].title);
+      updateTrackPart(trackId, part.id, { ...(partTitle ? { title: partTitle } : {}), query: cleanQuery, candidates: response.candidates, selectedVideoId: keep ? part.selectedVideoId : response.candidates[0].videoId, assetId: keep ? part.assetId : null, confirmed: false });
     } catch (error) { setTrackErrors(prev => ({ ...prev, [part.id]: error instanceof Error ? error.message : 'Tìm kiếm thất bại.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [part.id]: '' })); }
   }, []);
@@ -138,7 +166,8 @@ export default function App() {
       const response = await search(cleanQuery, abortRef.current.signal);
       if (!response.candidates.length) { setTrackErrors(prev => ({ ...prev, [track.id]: 'Không tìm thấy kết quả phù hợp. Hãy sửa query rồi thử lại.' })); return; }
       const keep = response.candidates.some(c => c.videoId === track.selectedVideoId);
-      updateTrack(track.id, { query: cleanQuery, candidates: response.candidates, selectedVideoId: keep ? track.selectedVideoId : response.candidates[0].videoId, assetId: keep ? track.assetId : null, confirmed: false });
+      const nextTitle = titleFromLookup(track.title, response.candidates[0].title);
+      updateTrack(track.id, { ...(nextTitle ? { title: nextTitle } : {}), query: cleanQuery, candidates: response.candidates, selectedVideoId: keep ? track.selectedVideoId : response.candidates[0].videoId, assetId: keep ? track.assetId : null, confirmed: false });
     } catch (error) { setTrackErrors(prev => ({ ...prev, [track.id]: error instanceof Error ? error.message : 'Tìm kiếm thất bại.' })); }
     finally { setTrackBusy(prev => ({ ...prev, [track.id]: '' })); }
   }, [runPartSearch]);
@@ -172,6 +201,7 @@ export default function App() {
         setPlaylist(initialPlaylist);
       }
       restoredRef.current = true;
+      setReadyToAdd(true);
       if (initialPlaylist) {
         await verifySavedAssets(initialPlaylist);
         if (staleSearchTracks.length) await forEachConcurrent(staleSearchTracks, runTrackSearch);
@@ -294,7 +324,9 @@ export default function App() {
       const playStep = (index: number) => {
         if (index >= chainItems.length) return;
         const { part, asset, url, end } = chainItems[index];
-        playEdited(part.id, url, { ...part, endSeconds: end }, asset.durationSeconds, () => playStep(index + 1));
+        playEdited(part.id, url, { ...part, endSeconds: end }, asset.durationSeconds, () => {
+          if (index + 1 < chainItems.length) previewAudio.afterGap(medleyGap(track), () => playStep(index + 1));
+        });
       };
       playStep(0);
     } catch (error) {
@@ -340,21 +372,26 @@ export default function App() {
     }
   };
 
+  const addSection = () => {
+    const id = crypto.randomUUID();
+    setFocusTitleId(id);
+    mutatePlaylist(current => ({
+      ...current,
+      sections: [...current.sections, { id, title: `Mục ${current.sections.length + 1}`, tracks: [] }],
+    }), false, { id: crypto.randomUUID(), title: 'Nhạc cưới', sections: [] });
+  };
+
+  const addSong = (sectionId: string, medley: boolean) => {
+    const parts = medley ? [newSong('Bài 1'), newSong('Bài 2')] : undefined;
+    const track: Track = { ...newSong(parts?.map(p => p.title).join(' + ') ?? 'Bài mới'), kind: 'music', parts };
+    setFocusTitleId(parts?.[0].id ?? track.id);
+    mutatePlaylist(current => ({ ...current, sections: current.sections.map(section =>
+      section.id === sectionId ? { ...section, tracks: [...section.tracks, track] } : section),
+    }));
+  };
+
   const addPartToTrack = (track: Track) => {
-    const newPart: TrackPart = {
-      id: crypto.randomUUID(),
-      title: 'Bài ghép mới',
-      query: 'Bài ghép mới lyrics',
-      note: '',
-      startSeconds: 0,
-      endSeconds: null,
-      fadeInSeconds: 0,
-      fadeOutSeconds: 0,
-      selectedVideoId: null,
-      assetId: null,
-      confirmed: false,
-      candidates: [],
-    };
+    const newPart = newSong('Bài ghép mới');
     if (track.parts?.length) {
       const nextParts = [...track.parts, newPart];
       updateTrack(track.id, { parts: nextParts, title: nextParts.map(p => p.title).join(' + '), confirmed: false });
@@ -398,6 +435,8 @@ export default function App() {
         confirmed: sole?.confirmed ?? false,
         candidates: sole?.candidates ?? [],
         parts: undefined,
+        gapEnabled: undefined,
+        gapSeconds: undefined,
       });
     } else {
       updateTrack(track.id, {
@@ -473,7 +512,10 @@ export default function App() {
             if (Object.keys(errs).length > 0) {
               throw new Error(`Phần "${p.title}": ${Object.values(errs).join(' ')}`);
             }
-            exportParts.push(...toExportParts(p, asset.assetId, { ...p, endSeconds }, asset.durationSeconds));
+            const segments = toExportParts(p, asset.assetId, { ...p, endSeconds }, asset.durationSeconds);
+            const gap = medleyGap(t);
+            if (exportParts.length && gap > 0) segments[0].gapBeforeSeconds = gap;
+            exportParts.push(...segments);
           }
           trackAssetMap[t.id] = toExportFields(exportParts);
         } else {
@@ -640,14 +682,14 @@ export default function App() {
           <input id="rights-check" type="checkbox" checked={rightsAccepted} onChange={e => { setRightsAccepted(e.target.checked); void writeStorage(NOTICE_KEY, e.target.checked); }} />
           <span>Tôi xác nhận chỉ tải và xử lý nội dung âm thanh mà mình có quyền sử dụng.</span>
         </label>
-        <span className="notice-chip">Chuẩn xuất: MP3 / WAV · Chia theo thư mục ZIP</span>
+        <span className="notice-chip">Chuẩn xuất: MP3 192 kbps · Chia theo thư mục ZIP</span>
       </section>
 
       <section className="composer-card" aria-labelledby="input-heading">
         <div className="composer-top">
           <div>
             <h2 id="input-heading">1. Dán danh sách và rà soát cấu trúc</h2>
-            <p className="composer-subtitle">Dán danh sách từ ghi chú, Word hoặc chat: tên mục có hoặc không đánh số, bài hát xuống dòng, đánh số hay gạch đầu dòng. Ghép nhiều bài trong 1 dòng bằng dấu <code>+</code> (vd: <code>Em đồng ý + Yes I do + Một nhà</code>). Hỗ trợ khoảng thời gian <code>(1:07–2:10)</code>.</p>
+            <p className="composer-subtitle">Dán danh sách từ ghi chú, Word hoặc chat: tên mục có hoặc không đánh số, bài hát xuống dòng, đánh số hay gạch đầu dòng. Ghép nhiều bài trong 1 dòng bằng dấu <code>+</code> (vd: <code>Em đồng ý + Yes I do + Một nhà</code>). Hỗ trợ khoảng thời gian <code>(1:07–2:10)</code>. Có thể dán link YouTube thay cho tên bài (vd: <code>1. https://youtu.be/…</code>) để dùng đúng video đó.</p>
           </div>
           <div className="composer-top-actions">
             {!text.trim() && (
@@ -670,6 +712,7 @@ export default function App() {
             setPlaylist(res.playlist); setDirty(false);
             clearTimeout(saveTimer.current); void writeStorage(STATE_KEY, { text, playlist: res.playlist });
           }}>Phân tích danh sách</button>
+          <button type="button" className="secondary-button" disabled={!readyToAdd} onClick={addSection}>+ Thêm mục</button>
           <button type="button" className="secondary-button" disabled={!musicTracks.length} onClick={() => void forEachConcurrent(musicTracks, runTrackSearch)}>Tìm nhạc cho {musicTracks.length} bài</button>
           {(playlist !== null || text.trim().length > 0) && (
             <button type="button" className="danger-ghost-btn" onClick={handleResetAll}>↻ Làm mới tất cả</button>
@@ -696,9 +739,14 @@ export default function App() {
                   <span className="section-number">Mục {String(sIndex + 1).padStart(2, '0')}</span>
                   <label className="section-title-field">
                     <span>Tiêu đề mục</span>
-                    <input value={section.title} onChange={e => mutatePlaylist(cur => ({ ...cur, sections: cur.sections.map(s => s.id === section.id ? { ...s, title: e.target.value } : s) }))} />
+                    <input autoFocus={focusTitleId === section.id} onFocus={e => e.target.select()} value={section.title} onChange={e => mutatePlaylist(cur => ({ ...cur, sections: cur.sections.map(s => s.id === section.id ? { ...s, title: e.target.value } : s) }))} />
                   </label>
                   <span className="section-badge">{sectionMusic.length ? `${sectionConfirmed}/${sectionMusic.length} bài đã chốt` : 'Mục ghi chú (thư mục rỗng)'}</span>
+                </div>
+
+                <div className="composer-actions">
+                  <button type="button" className="secondary-button" onClick={() => addSong(section.id, false)}>+ Thêm bài đơn</button>
+                  <button type="button" className="secondary-button" onClick={() => addSong(section.id, true)}>+ Thêm bài ghép</button>
                 </div>
 
                 {section.tracks.map((track, tIndex) => {
@@ -708,7 +756,7 @@ export default function App() {
                     <article className={`track-card ${track.confirmed && isTrackConfirmable(track) ? 'is-confirmed' : ''} ${track.kind === 'note' ? 'is-note' : ''} ${isMedley ? 'is-medley' : ''}`} key={track.id}>
                       <div className="track-row">
                         <strong className="track-index">#{tIndex + 1}</strong>
-                        <label>Tên dòng / File xuất<input value={track.title} onChange={e => updateTrack(track.id, { title: e.target.value, ...(isMedley ? {} : { query: buildSearchQuery(e.target.value), confirmed: false }) })} /></label>
+                        <label>Tên dòng / File xuất<input autoFocus={focusTitleId === track.id} onFocus={e => e.target.select()} value={track.title} onChange={e => updateTrack(track.id, { title: e.target.value, ...(isMedley ? {} : { query: buildSearchQuery(e.target.value), confirmed: false, ...linkPatch(e.target.value, track) }) })} /></label>
                         <label>Loại<select value={track.kind} onChange={e => updateTrack(track.id, { kind: e.target.value as Track['kind'], confirmed: false })}><option value="music">Bài nhạc</option><option value="note">Ghi chú / không tìm</option></select></label>
                         <label>Ghi chú<input value={track.note} placeholder="Chú thích (tùy chọn)" onChange={e => mutatePlaylist(cur => ({ ...cur, sections: cur.sections.map(s => ({ ...s, tracks: s.tracks.map(t => t.id === track.id ? { ...t, note: e.target.value } : t) })) }))} /></label>
                         <button type="button" className="danger-ghost-btn" onClick={() => mutatePlaylist(cur => ({ ...cur, sections: cur.sections.map(s => ({ ...s, tracks: s.tracks.filter(t => t.id !== track.id) })) }))}>Xóa dòng</button>
@@ -766,6 +814,11 @@ export default function App() {
                               </span>
                             </div>
                             <div className="medley-banner-actions">
+                              <label><input type="checkbox" checked={track.gapEnabled ?? false} onChange={e => updateTrack(track.id, { gapEnabled: e.target.checked, confirmed: false })} /> Nghỉ giữa các bài</label>
+                              {track.gapEnabled && <label>Thời gian nghỉ (giây) <input type="number" min="0" step="0.1" style={{ width: '6em' }} value={track.gapSeconds ?? 3} onChange={e => {
+                                const seconds = Number(e.target.value);
+                                if (Number.isFinite(seconds) && seconds >= 0) updateTrack(track.id, { gapSeconds: seconds, confirmed: false });
+                              }} /></label>}
                               <button type="button" className="ghost-button" onClick={() => addPartToTrack(track)}>+ Ghép thêm bài</button>
                               <button
                                 type="button"
@@ -809,8 +862,10 @@ export default function App() {
                                     <label className="medley-part-title">
                                       <span>Tên bài phần {pIndex + 1}</span>
                                       <input
+                                        autoFocus={focusTitleId === part.id}
+                                        onFocus={e => e.target.select()}
                                         value={part.title}
-                                        onChange={e => updateTrackPart(track.id, part.id, { title: e.target.value, query: buildSearchQuery(e.target.value), confirmed: false })}
+                                        onChange={e => updateTrackPart(track.id, part.id, { title: e.target.value, query: buildSearchQuery(e.target.value), confirmed: false, ...linkPatch(e.target.value, part) })}
                                       />
                                     </label>
                                     <label className="medley-part-query">

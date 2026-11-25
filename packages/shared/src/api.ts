@@ -22,6 +22,7 @@ export const JobSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
 }).strict();
 export const ExportTrackPartSchema = z.object({
+  gapBeforeSeconds: seconds.optional(),
   id: IdSchema, title: z.string(), assetId: IdSchema, startSeconds: seconds, endSeconds: seconds,
   fadeInSeconds: seconds, fadeOutSeconds: seconds, confirmed: z.literal(true),
 }).strict().superRefine((part, ctx) => {
